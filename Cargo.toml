@@ -1,11 +1,11 @@
 [workspace]
-members = ["crates/crypto", "crates/node"]
+members = ["crates/crypto", "crates/node", "crates/app"]
 resolver = "2"
 
 [profile.release]
 strip = "symbols"
 
-# The Swift static library keeps its abort-on-panic build; the Node addon keeps unwinding.
+# Legacy C ABI builds keep abort-on-panic; the desktop app and Node addon use release.
 [profile.crypto-release]
 inherits = "release"
 panic = "abort"

@@ -2,9 +2,9 @@
 
 [English](README.md) | **中文**
 
-独立的本机钱包小工具：Swift 负责安全输入、macOS Keychain 和系统认证；Rust 静态库使用成熟实现派生 secp256k1 / SLIP-0010 Ed25519 密钥；Rust 桥接通过 napi-rs 暴露给 Node，负责原生进程通信、缓存和结果复核；TypeScript 只保留类型与加载封装，业务自行使用自己的钱包库。
+独立的本机钱包小工具：Rust egui/eframe 应用负责创建、导入、macOS 安全输入、Keychain 和系统认证；共享 Rust 密码学库使用成熟实现派生 secp256k1 / SLIP-0010 Ed25519 密钥；Rust 桥接通过 napi-rs 暴露给 Node，负责原生进程通信、缓存和结果复核；TypeScript 只保留类型与加载封装，业务自行使用自己的钱包库。
 
-**当前状态：已完成 Personal Team 签名构建，并用公开无资金测试钱包通过真实 Keychain 保存、系统认证读取、Node 接入和 viem/ethers 离线消息签名验证。** 已实际操作两种算法的图形创建与导入；Ed25519 完整创建、Copy → Paste 确认、错误公钥拒绝、正确导入和后续认证读取均通过。真实资金交易未验证。详见 [验证记录](docs/verification.md)。未读取其他现有钱包秘密，没有后台服务、网络监听、自动任务和遥测。
+**当前状态：macOS 原生程序已迁到 Rust egui/eframe，Personal Team 签名构建、自动化测试、新版图形 Ed25519 导入、双算法完整新建备份确认，以及 Node 的真实认证读取与离线签名均已通过。界面采用紧凑的 macOS 风格表单与蓝色主按钮。** UI 使用跨平台框架，存储与认证后端目前仍仅支持 macOS。本次已实际验证生成、揭示、Copy、Paste / Cmd+V、完整确认与保存；错误确认被拒绝且独立读取确认未保存。随机测试钱包没有长期离线恢复备份，不应入金。旧版验证记录单独保留。真实资金交易未验证。详见 [验证记录](docs/verification.md)。未读取其他现有钱包秘密，没有后台服务、网络监听、自动任务和遥测。
 
 本版本的 `getKeyPair` 必须显式传 `curve`，支持 `secp256k1` 和 `ed25519`；只返回公私钥，不要求地址。最终 napi-rs 桥接已通过双算法的真实 Keychain 认证读取与 Ed25519 离线签名核对；当前与历史结果分别见验证记录。
 
@@ -14,13 +14,12 @@
 keychain-wallet/
 ├── Cargo.toml / Cargo.lock       # Rust workspace，共用依赖锁
 ├── crates/
-│   ├── crypto/                  # 密钥派生与供 Swift 使用的 C ABI
+│   ├── crypto/                  # 共享密钥派生
+│   ├── app/                     # egui 界面、macOS Keychain、系统认证与 helper CLI
 │   └── node/                    # napi-rs 桥接、通信与内存缓存
 ├── macos/
 │   ├── KeychainWallet.xcodeproj/
-│   ├── Sources/                 # Swift 界面与 Keychain 访问
-│   ├── include/                 # C 头文件
-│   ├── Tests/                   # Swift 自检与 Python 配置检查
+│   ├── Tests/                   # Python 签名与打包配置检查
 │   └── …                        # Info.plist、entitlements、xcconfig
 ├── src/index.ts                 # Node 公开接口与原生模块加载
 ├── test/                        # Node SDK 集成测试
@@ -30,7 +29,7 @@ keychain-wallet/
 └── package.json
 ```
 
-`npm run build` 生成 `dist/index.js`、类型声明和 `dist/keychain-wallet.node`。Rust 默认产物在根目录 `target/`，Xcode 产物继续位于 `build/xcode/`，无需更改 SDK 的公开调用或应用查找位置。Swift 静态库使用 workspace 的 `crypto-release` 配置，保留 `panic = "abort"`；Node 原生模块继续使用 `release` 配置。
+`npm run build` 生成 `dist/index.js`、类型声明和 `dist/keychain-wallet.node`。Rust 默认产物在根目录 `target/`，Xcode 产物继续位于 `build/xcode/`，无需更改 SDK 的公开调用或应用查找位置。应用和 Node 模块均使用 `release` 配置。Xcode 调用 Cargo 构建 `wallet-app`，复制 Rust 可执行文件后完成打包签名，不再编译 Swift 或使用桥接头文件。
 
 ## 工作方式
 
@@ -53,7 +52,7 @@ Xcode 的共享 Run scheme 使用 Release、不挂调试器，按 Command-R 打�
 
 最低目标为 macOS 14，必须在已登录用户的图形会话中运行。SSH、无图形会话、系统 daemon 和 CI 的单元测试不能证明系统认证可用。Touch ID 非必需，但密码回退必须在实际机器验证。
 
-Apple 的 [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) 明确说明：Data Protection Keychain 访问组从可执行文件的 entitlements 取得，这些权限必须由 provisioning profile 授权；命令行工具需要 app-like bundle 来嵌入 profile，且仍只能在用户上下文使用。不是一个 `swift run` 或 ad hoc `codesign -s -` 就能完成的方案。
+Apple 的 [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) 明确说明：Data Protection Keychain 访问组从可执行文件的 entitlements 取得，这些权限必须由 provisioning profile 授权；命令行工具需要 app-like bundle 来嵌入 profile，且仍只能在用户上下文使用。不能只运行未打包的 Cargo 产物或使用 ad hoc `codesign -s -` 来替代这些授权。
 
 原生包结构：
 
@@ -76,7 +75,7 @@ KeychainWallet.app/
 
 ## 构建与离线检查
 
-需要 Swift、Rust/Cargo、Node >= 22、npm 和 Command Line Tools 的 Python 3。没有 Rust 工具链时，不提供自写密码学或 JS 派生降级。
+需要 Xcode、Rust/Cargo、Node >= 22、npm 和 Command Line Tools 的 Python 3。没有 Rust 工具链时，不提供自写密码学或 JS 派生降级。
 
 ```sh
 npm ci --ignore-scripts
@@ -105,6 +104,8 @@ bash scripts/build-native.sh \
 - **Create a new wallet**：选择算法、输入本地名称。secp256k1 默认使用 `m/44'/60'/0'/0/0`；Ed25519 必须填写完整 hardened 路径，各级都带 `'`。确认是否使用 BIP-39 附加口令，揭示并离线备份 12 个助记词，再从备份完整重新输入（也可通过 Paste recovery phrase 按钮或 Cmd+V 粘贴）。确认成功才写入 Keychain。
 - **Import an existing wallet**：选择算法、输入本地名称、派生路径和独立取得的核对值：secp256k1 使用 Ethereum 地址；Ed25519 使用 32 字节公钥的 `0x` hex（不是 base58 等链地址）。再手工输入助记词和附加口令，不匹配时不会保存。
 - 成功页显示可供业务使用的名称、算法、公钥和路径；secp256k1 另显示地址。取消任一步骤不会新增条目，同名不会覆盖。界面为英文。
+
+秘密输入页在窗口激活时启用 macOS Secure Event Input，字段遮蔽输入并清空撤销历史，不持久化界面状态。原生事件入口在 winit 读取剪贴板前拦截快捷键，只有新建确认页显式处理粘贴；禁止文件拖入填充。
 
 新建钱包的助记词只在创建时的本机备份页面显示，不进入 stdout、日志或文件。用户可点击 Copy recovery phrase 写入系统剪贴板；应用仍运行时会在 60 秒后尝试清除，复制其他内容后不会清除新内容。剪贴板管理器或其他应用可能保留副本，自动清除不保证撤回这些副本。工具不提供日常导出助记词的命令；保留独立离线备份。初期只使用无资金钱包。
 
@@ -193,7 +194,7 @@ const signer = new Wallet(privateKey, provider);
 
 同一 helper／名称／算法／最终派生路径在同一 Rust 模块实例中共用认证结果，并发只认证一次；不同进程分别认证，失败保持到进程退出。没有后台服务、跨进程解锁或磁盘缓存。业务拿到私钥后自行管理使用，锁屏不会撤回它。
 
-原生组件只接受一次最多 2 KiB 的公开名称、算法和路径请求，私钥只写到 Node 创建的 fd 3 管道/socketpair；stdout 只有公开元数据。Swift 应用中的 Rust 静态库统一派生密钥与公钥；Node 进程内的 Rust 桥接使用 k256 / ed25519-dalek 复核两者对应关系。原生应用和 SDK 必须一起升级，缺少算法或公钥元数据的旧 helper 会被拒绝。不会从参数、文件、环境变量读取私钥，也没有常规秘密导出命令。单次认证最长等待 120 秒，超时终止子进程并失败。
+原生组件只接受一次最多 2 KiB 的公开名称、算法和路径请求，私钥只写到 Node 创建的 fd 3 管道/socketpair；stdout 只有公开元数据。Rust 应用直接调用共享密码学库派生密钥与公钥；Node 进程内的 Rust 桥接使用 k256 / ed25519-dalek 复核两者对应关系。原生应用和 SDK 必须一起升级，缺少算法或公钥元数据的旧 helper 会被拒绝。不会从参数、文件、环境变量读取私钥，也没有常规秘密导出命令。单次认证最长等待 120 秒，超时终止子进程并失败。
 
 错误为固定代码，如 `CANCELLED`、`AUTHENTICATION_FAILED`、`NOT_FOUND`、`SIGNING_CONFIGURATION`、`INVALID_HELPER_RESPONSE`、`HELPER_START_FAILED`；不附带原始异常或秘密。取消和密码错误有时映射到同一认证失败码，都会停止，没有 `.env` 回退。
 
@@ -203,7 +204,7 @@ const signer = new Wallet(privateKey, provider);
 
 它无法防御已控制业务进程的代码、恶意依赖、可读取该进程内存的攻击者、被替换的可信 helper、系统级入侵、键盘记录或屏幕监控。认证窗口显示 helper 身份和所请求账户，不是对 Node 调用者的可信证明；不要批准来源不明的解锁请求。持有同一签名团队/访问组授权的其他受信程序也属于权限边界，签名配置应保持专用。
 
-原生侧禁用 core dump，Rust 对 seed 和派生私钥使用 zeroize，Swift 尽量清除显式字节缓冲；但 Swift String、Foundation、Rust 库内部临时值、JavaScript 字符串、GC、swap 或系统崩溃报告都不能由这个小工具保证彻底擦除。Node 的内存/诊断 dump 和调试器也可能暴露私钥，不要启用包含秘密的诊断采集。没有承诺进程退出后物理内存绝不残留，只承诺不主动持久化解锁状态。
+原生侧禁用 core dump，panic 只输出固定错误码，Rust 对持有的助记词、附加口令、seed 和派生私钥使用 zeroize；但 egui、系统和 Foundation 临时值、Rust 库内部副本、JavaScript 字符串、GC、swap 或系统崩溃报告都不能由这个小工具保证彻底擦除。Node 的内存/诊断 dump 和调试器也可能暴露私钥，不要启用包含秘密的诊断采集。没有承诺进程退出后物理内存绝不残留，只承诺不主动持久化解锁状态。
 
 Apple Secure Enclave 的原生 EC 签名能力与 EVM 使用的 secp256k1 不同；此实现并未让 EVM 私钥在 Secure Enclave 内完成原生签名。Keychain 保护存储和访问，交易由 Node 中原有钱包库签名。
 
@@ -222,6 +223,7 @@ Apple Secure Enclave 的原生 EC 签名能力与 EVM 使用的 secp256k1 不同
 
 - Apple：[钥匙串实现与权限条件](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)、[受限权限的 app-like bundle](https://developer.apple.com/documentation/xcode/signing-a-daemon-with-a-restricted-entitlement)、[钥匙串访问控制](https://developer.apple.com/documentation/security/restricting-keychain-item-accessibility)、[认证上下文及复用说明](https://developer.apple.com/documentation/localauthentication/accessing-keychain-items-with-face-id-or-touch-id)。
 - 密码学库：[rust-bip39](https://github.com/rust-bitcoin/rust-bip39)、[bip32 0.5.3 / RustCrypto k256 后端](https://docs.rs/bip32/0.5.3/bip32/)、[RustCrypto Keccak](https://docs.rs/sha3/0.10.8/sha3/)。Ed25519 使用 [ed25519-dalek-bip32 0.3.0](https://docs.rs/ed25519-dalek-bip32/0.3.0/ed25519_dalek_bip32/) 和 [ed25519-dalek 2.2.0](https://docs.rs/ed25519-dalek/2.2.0/ed25519_dalek/)，显式启用 zeroize。遵循 [SLIP-0010](https://github.com/satoshilabs/slips/blob/master/slip-0010.md)、[RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html)；路径示例参考 [Solana 官方示例](https://solana.com/developers/cookbook/wallets/restore-from-mnemonic)。不自行实现 BIP-39、BIP-32、SLIP-0010、曲线运算或哈希。
+- 界面：[egui/eframe](https://docs.rs/eframe/0.33.3/eframe/) 与 [objc2 Apple 框架绑定](https://github.com/madsmtm/objc2)。
 - Node 绑定：[napi-rs](https://napi.rs/docs/concepts/async-task)；通过 Node-API 异步调用 Rust，JS 对外仍返回 Promise。
 - 业务侧参考：[viem privateKeyToAccount](https://viem.sh/docs/accounts/local/privateKeyToAccount)、[ethers v5 Wallet](https://docs.ethers.org/v5/api/signer/#Wallet)、[ethers v6 Wallet](https://docs.ethers.org/v6/api/wallet/#Wallet)。
 

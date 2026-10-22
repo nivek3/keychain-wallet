@@ -2,7 +2,8 @@
 set -euo pipefail
 umask 077
 : "${SRCROOT:?Run this build phase from Xcode}"
-: "${BUILT_PRODUCTS_DIR:?Missing Xcode build output directory}"
+: "${TARGET_BUILD_DIR:?Missing Xcode build output directory}"
+: "${EXECUTABLE_PATH:?Missing app executable path}"
 : "${NATIVE_ARCH_ACTUAL:?Missing native Mac architecture}"
 case "$NATIVE_ARCH_ACTUAL" in
   arm64) rust_target=aarch64-apple-darwin ;;
@@ -16,6 +17,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 root=$(cd "$SRCROOT/.." && pwd)
 export CARGO_TARGET_DIR="$root/build/xcode-rust"
-cargo build --profile crypto-release --locked --target "$rust_target" --manifest-path "$root/Cargo.toml" -p wallet-crypto
-mkdir -p "$BUILT_PRODUCTS_DIR"
-cp "$CARGO_TARGET_DIR/$rust_target/crypto-release/libwallet_crypto.a" "$BUILT_PRODUCTS_DIR/libwallet_crypto.a"
+export MACOSX_DEPLOYMENT_TARGET=14.0
+cargo build --release --locked --target "$rust_target" --manifest-path "$root/Cargo.toml" -p wallet-app
+mkdir -p "$(dirname "$TARGET_BUILD_DIR/$EXECUTABLE_PATH")"
+cp "$CARGO_TARGET_DIR/$rust_target/release/KeychainWallet" "$TARGET_BUILD_DIR/$EXECUTABLE_PATH"

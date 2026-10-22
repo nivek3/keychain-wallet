@@ -1,9 +1,6 @@
 PRODUCT_NAME = KeychainWallet
 PRODUCT_BUNDLE_IDENTIFIER = dev.phcxc.KeychainWallet.a15e8e
 MACOSX_DEPLOYMENT_TARGET = 14.0
-SWIFT_VERSION = 5.0
-SWIFT_OBJC_BRIDGING_HEADER = $(SRCROOT)/include/WalletCrypto.h
-SWIFT_OPTIMIZATION_LEVEL = -O
 GENERATE_INFOPLIST_FILE = NO
 INFOPLIST_FILE = Info.plist
 INFOPLIST_EXPAND_BUILD_SETTINGS = YES
@@ -20,5 +17,3 @@ ENABLE_USER_SCRIPT_SANDBOXING = NO
 // shortcut: native Mac architecture only; add cross compilation before distributing universal builds.
 ARCHS = $(NATIVE_ARCH_ACTUAL)
 ONLY_ACTIVE_ARCH = YES
-LIBRARY_SEARCH_PATHS = $(inherited) "$(BUILT_PRODUCTS_DIR)"
-OTHER_LDFLAGS = $(inherited) -lwallet_crypto -liconv -lresolv

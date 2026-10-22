@@ -23,14 +23,9 @@ mkdir -p "$app/Contents/MacOS"
 cp "$profile" "$app/Contents/embedded.provisionprofile"
 
 export CARGO_TARGET_DIR="$root/target"
-cargo build --profile crypto-release --locked --manifest-path "$root/Cargo.toml" -p wallet-crypto
-xcrun swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos14.0" \
-  -module-cache-path "$root/build/swift-module-cache" \
-  -import-objc-header "$root/macos/include/WalletCrypto.h" \
-  "$root/macos/Sources/WalletCore.swift" "$root/macos/Sources/main.swift" "$root/target/crypto-release/libwallet_crypto.a" \
-  -liconv -lresolv \
-  -framework AppKit -framework Foundation -framework Security -framework LocalAuthentication \
-  -o "$app/Contents/MacOS/KeychainWallet"
+export MACOSX_DEPLOYMENT_TARGET=14.0
+cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-app
+cp "$root/target/release/KeychainWallet" "$app/Contents/MacOS/KeychainWallet"
 
 /usr/bin/codesign --force --sign "$identity" --options runtime --timestamp \
   --entitlements "${app%/*}/entitlements.plist" "$app"

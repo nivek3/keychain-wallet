@@ -2,9 +2,9 @@
 
 **English** | [中文](README_ZH.md)
 
-A local key provider for macOS and Node.js. Swift handles secure input, Keychain storage, and system authentication. Rust derives secp256k1 and SLIP-0010 Ed25519 keys. A napi-rs bridge handles communication, authentication serialization, in-memory caching, and key-pair verification. TypeScript exposes a small interface; your application uses its own wallet or signing library.
+A local key provider for macOS and Node.js. A Rust egui/eframe application handles wallet creation/import, native macOS secure input, Keychain storage, and system authentication. The shared Rust crypto crate derives secp256k1 and SLIP-0010 Ed25519 keys. A napi-rs bridge handles communication, authentication serialization, in-memory caching, and key-pair verification. TypeScript exposes a small interface; your application uses its own wallet or signing library.
 
-**Status:** Personal Team signing, real Keychain storage and authenticated reads, both curves, and offline signing have been verified with unfunded test wallets on the development Mac. The October 22 directory migration also passed builds, automated checks, and a packed-package consumer check. See the dated [verification record (Chinese)](docs/verification.md) for the exact scope. No funded transactions or RPC broadcasts were tested.
+**Status:** Personal Team signing, real Keychain storage and authenticated reads, both curves, and offline signing have been verified with unfunded test wallets on the development Mac. The October 22 Rust desktop migration passed the signed macOS build, automated checks, GUI Ed25519 import, and full new-wallet backup/confirmation flows for both curves. Authenticated Node reads and offline signatures matched the created wallets. The English UI uses compact macOS-style forms and blue primary buttons. The UI uses egui/eframe; storage and authentication currently support macOS only. See the dated [verification record (Chinese)](docs/verification.md) for the exact scope. No funded transactions or RPC broadcasts were tested.
 
 ## Repository layout
 
@@ -12,13 +12,12 @@ A local key provider for macOS and Node.js. Swift handles secure input, Keychain
 keychain-wallet/
 ├── Cargo.toml / Cargo.lock       # Rust workspace and shared lockfile
 ├── crates/
-│   ├── crypto/                  # Key derivation and C ABI for Swift
+│   ├── crypto/                  # Shared key derivation
+│   ├── app/                     # egui UI, macOS Keychain, authentication, helper CLI
 │   └── node/                    # napi-rs bridge, IPC, and memory cache
 ├── macos/
 │   ├── KeychainWallet.xcodeproj/
-│   ├── Sources/                 # Swift UI and Keychain access
-│   ├── include/                 # C header
-│   ├── Tests/                   # Swift checks and Python config tests
+│   ├── Tests/                   # Python signing and bundle config tests
 │   └── …                        # Info.plist, entitlements, xcconfig
 ├── src/index.ts                 # Node API and native-module loading
 ├── test/                        # Node integration tests
@@ -28,12 +27,12 @@ keychain-wallet/
 └── package.json
 ```
 
-`npm run build` produces JavaScript, type declarations, and `dist/keychain-wallet.node`. Cargo normally writes to `target/`; Xcode outputs remain under `build/xcode/`. The Swift static library uses the `crypto-release` profile with `panic = "abort"`; the Node addon uses the `release` profile with unwinding.
+`npm run build` produces JavaScript, type declarations, and `dist/keychain-wallet.node`. Cargo normally writes to `target/`; Xcode outputs remain under `build/xcode/`. The app and Node addon use the `release` profile. Xcode invokes Cargo to build `wallet-app`, copies the Rust executable into the app bundle, and signs it. No Swift sources or bridging header are used.
 
 ## Requirements and signing
 
 - macOS 14 or later, running in a logged-in user's graphical session.
-- Xcode, Swift, Rust/Cargo, Node.js 22 or later, npm, and Python 3.
+- Xcode, Rust/Cargo, Node.js 22 or later, npm, and Python 3.
 - A valid signing identity and provisioning profile authorizing the app identifier and private Keychain group. Xcode can manage local development signing with a free Personal Team.
 
 Open `macos/KeychainWallet.xcodeproj`, sign in to your Apple Account in Xcode Settings, and select your **Personal Team** under the **KeychainWallet target → Signing & Capabilities**. Keep **Automatically manage signing** enabled. Select **My Mac**, build with **Command-B**, then run with **Command-R**. Follow the [Personal Team setup guide](docs/signing.md) for the full steps and troubleshooting.
@@ -58,6 +57,8 @@ Open the signed app and choose one of its two entry points:
 The success page shows the name, curve, path, and public key; secp256k1 also shows an address. Cancelling does not create an entry. An existing name returns `ALREADY_EXISTS` and is never overwritten. To replace a wallet, import under a new name and verify it before separately deciding whether to delete the old entry.
 
 A BIP-39 passphrase is **not your Mac login password or a wallet application's unlock password**. Leaving it empty is supported through the explicit checkbox. Nonempty passphrases require confirmation; spaces are preserved and BIP-39 NFKD normalization applies. A different passphrase derives a different wallet. Here it is stored with the recovery phrase in the same authenticated entry, so it is not an independent second authentication factor. Only English BIP-39 phrases are accepted.
+
+Secret entry enables macOS Secure Event Input while the window is active. Password fields are masked, their undo history is cleared, and app-state persistence is disabled. Native key-event interception blocks clipboard shortcuts before winit can read the clipboard; the confirmation page handles permitted paste explicitly. File drops cannot fill inputs.
 
 The creation backup page offers **Copy recovery phrase**. Only the new-wallet confirmation field permits **Paste recovery phrase / Cmd+V**. Import and passphrase fields disable copying, cutting, and pasting. While the app remains running, it attempts to clear its copied phrase after 60 seconds without clearing newer clipboard content. Clipboard managers and other apps may retain copies; clearing does not revoke those copies. Keep an offline backup. There is no routine recovery-phrase export command.
 
@@ -183,7 +184,7 @@ bash scripts/build-native.sh \
 
 This script creates a new app bundle, embeds the profile, enables Hardened Runtime, and signs it. It does not register an App ID, download certificates, export private keys, notarize, or publish the app. The profile's App Identifier Prefix is not assumed to equal its Team ID. Only the app identifier, Team identifier, and one private Keychain group are signed; debug entitlements are not injected. Runtime checks reject invalid/ad hoc signing, a missing profile, a wrong access group, missing Hardened Runtime, and unsafe debugging entitlements. The operating system makes the final entitlement-authorization decision.
 
-The October 22 checks passed: Node 10/10, Rust 13/13, Python 4/4, Swift/Rust public-vector checks, clipboard checks, Xcode Release signing, strict signature verification, and installing a packed package into a separate Node consumer. That refactor did not repeat GUI creation/import, real Keychain authentication, or the manual-profile build branch. Earlier dated verification covers the real UI and authentication checks.
+The dated [verification record (Chinese)](docs/verification.md) separates the earlier directory refactor from this Rust desktop migration. For the migration, the signed Rust app imported an unfunded public Ed25519 test wallet, and the unchanged Node SDK read both a legacy secp256k1 entry and that new Ed25519 entry through real macOS authentication; public-key matching and offline signature checks passed. Automated checks cover request limits, transport restrictions, derivation vectors, the complete-backup confirmation gate, signing guards, authentication-context configuration, and clipboard expiration. The follow-up GUI checks completed random-wallet generation, reveal, Copy, confirmation, and save for both curves: secp256k1 used the Paste button, and Ed25519 used Cmd+V. An incorrect confirmation was rejected, and a separate read confirmed that no entry had been saved. Authenticated reads and independent offline signatures matched both success pages. These generated test wallets have no permanent offline recovery backup and must remain unfunded. The manual-profile build path was not repeated.
 
 The earlier npm audit reported 14 low-severity findings in the ethers v5 development dependency chain; this documentation change does not constitute a fresh dependency or security audit. No npm production dependencies does not mean the Rust dependencies or application wallet libraries have been audited.
 
@@ -219,7 +220,7 @@ This tool reduces long-lived secret exposure in `.env` files, configuration back
 
 It does not protect against malicious application code or dependencies, attackers who can read process memory, a replaced trusted helper, system compromise, keylogging, or screen monitoring. The authentication dialog identifies the helper and requested account, not a trusted Node caller. Other trusted programs authorized for the same signing/access group are inside the security boundary.
 
-The native app disables core dumps, Rust zeroizes seed/private-key buffers, and Swift clears explicit byte buffers where possible. Complete erasure of Swift/Foundation strings, library temporaries, JavaScript strings, GC memory, swap, or crash/diagnostic dumps is not guaranteed. Keep secret-bearing diagnostics and debuggers disabled. The implementation does not perform EVM signing inside the Secure Enclave; your Node wallet library signs with the returned key.
+The native app disables core dumps and replaces panic output with a fixed error code. Rust zeroizes owned recovery-phrase, passphrase, seed, and private-key buffers. Complete erasure of egui/OS/Foundation temporaries, library copies, JavaScript strings, GC memory, swap, or crash/diagnostic dumps is not guaranteed. Keep secret-bearing diagnostics and debuggers disabled. The implementation does not perform EVM signing inside the Secure Enclave; your Node wallet library signs with the returned key.
 
 Keychain migration does not make an already leaked key safe. This tool does not move funds, revoke approvals, delete old secret files, or broadcast transactions. `ThisDeviceOnly` storage with synchronization disabled is not a cross-device recovery mechanism. Keep an independent offline backup.
 
@@ -229,5 +230,6 @@ Real authentication results are specific to the tested Mac and signing configura
 
 - Apple: [Keychain implementations and provisioning](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains), [restricted-entitlement bundles](https://developer.apple.com/documentation/xcode/signing-a-daemon-with-a-restricted-entitlement), [Keychain access controls](https://developer.apple.com/documentation/security/restricting-keychain-item-accessibility), [authentication contexts](https://developer.apple.com/documentation/localauthentication/accessing-keychain-items-with-face-id-or-touch-id), [Mac distribution signing](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/).
 - Cryptography: [rust-bip39](https://github.com/rust-bitcoin/rust-bip39), [bip32 0.5.3](https://docs.rs/bip32/0.5.3/bip32/), [Keccak](https://docs.rs/sha3/0.10.8/sha3/), [ed25519-dalek-bip32 0.3.0](https://docs.rs/ed25519-dalek-bip32/0.3.0/ed25519_dalek_bip32/), [ed25519-dalek 2.2.0](https://docs.rs/ed25519-dalek/2.2.0/ed25519_dalek/), [SLIP-0010](https://github.com/satoshilabs/slips/blob/master/slip-0010.md), [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html).
+- UI: [egui/eframe](https://docs.rs/eframe/0.33.3/eframe/), [objc2 Apple framework bindings](https://github.com/madsmtm/objc2).
 - Integration: [napi-rs](https://napi.rs/docs/concepts/async-task), [viem](https://viem.sh/docs/accounts/local/privateKeyToAccount), [ethers v5](https://docs.ethers.org/v5/api/signer/#Wallet), [ethers v6](https://docs.ethers.org/v6/api/wallet/#Wallet), [Solana recovery-path example](https://solana.com/developers/cookbook/wallets/restore-from-mnemonic).
 - UI reference: MetaMask's [creation/import entry points](https://support.metamask.io/hc/en-us/articles/360015489531) and [recovery-phrase import flow](https://support.metamask.io/start/use-an-existing-wallet).

@@ -55,14 +55,14 @@ fn derive_seed(seed: &[u8], curve: u32, path: &str) -> Result<(Zeroizing<[u8; 32
     }
 }
 
-fn derive(mnemonic: &str, passphrase: &str, curve: u32, path: &str)
+pub fn derive(mnemonic: &str, passphrase: &str, curve: u32, path: &str)
     -> Result<(Zeroizing<[u8; 32]>, Vec<u8>), i32> {
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic).map_err(|_| 1)?;
     let seed = Zeroizing::new(mnemonic.to_seed(passphrase));
     derive_seed(&seed[..], curve, path)
 }
 
-fn ethereum_address(public: &[u8]) -> [u8; 20] {
+pub fn ethereum_address(public: &[u8]) -> [u8; 20] {
     let hash = Keccak256::digest(&public[1..]);
     let mut address = [0; 20];
     address.copy_from_slice(&hash[12..]);
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn mw_ethereum_address(public: *const u8, address_out: *mu
     0
 }
 
-/// Buffers belong to the Swift caller; no secret is logged or allocated across the ABI.
+/// Legacy C ABI; the desktop app calls the safe Rust API. No secret is logged across this ABI.
 /// Safety: inputs must be valid nonoverlapping buffers of the stated lengths;
 /// outputs must be writable buffers of 32 and 65 bytes respectively.
 /// Curve 0 = secp256k1, curve 1 = SLIP-0010 Ed25519 (public output uses its first 32 bytes).
@@ -253,4 +253,9 @@ mod tests {
         assert!(derive("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon", "", 0, PATH).is_err());
         assert!(derive(WORDS, "", 0, "bad/path").is_err());
     }
+}
+
+/// Convert OS-supplied entropy to an English BIP-39 phrase without crossing an FFI boundary.
+pub fn mnemonic_from_entropy(entropy: &[u8; 16]) -> Result<Zeroizing<String>, i32> {
+    Mnemonic::from_entropy_in(Language::English, entropy).map(|m| Zeroizing::new(m.to_string())).map_err(|_| 1)
 }

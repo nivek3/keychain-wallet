@@ -2,6 +2,28 @@
 
 最近更新：2026-10-22（北京时间）；下方保留 2026-10-21 的历史验证记录。仅使用本机和无资金测试钱包，没有连接 RPC、签署真实交易或广播交易。
 
+## 2026-10-22 新建备份确认与界面更新
+
+- 界面按用户选择调整为 macOS 原生极简风格：系统字体、紧凑表单、浅灰背景、蓝色主按钮，Back / Cancel 与 Continue / Save 位于同一行，不再使用整行巨型按钮。界面仍由 egui 绘制，并非 AppKit 原生控件；没有改变密钥接口或认证机制。
+- 最终界面版本的 Rust workspace 测试 **25/25**（app 12 + 桥接 6 + 密码学 7）、Python 配置测试 **4/4** 通过。新增系统字体与最小窗口表单渲染检查，约束按钮尺寸和可见范围。SDK Release 构建通过；最终 TypeScript 检查、Node 集成测试 **10/10**、Xcode Release 构建、`codesign --verify --strict` 和 `check-signing` 通过。
+- 在实际签名应用中，新建 secp256k1 无资金条目 `rust-create-secp-20261022`，默认路径 `m/44'/60'/0'/0/0`。未勾选空附加口令时无法继续；错误备份确认被拒绝，独立 SDK 查询得到 `NOT_FOUND`，确认此时未写入 Keychain。取消后重新生成，完成揭示 12 词、Copy、确认页 Paste 按钮、Confirm and save，显示 `Wallet created`。
+- 在最终紧凑界面中，新建 Ed25519 无资金条目 `rust-create-ed-20261022`，路径 `m/44'/501'/0'/0'`，明确选择空附加口令。实际完成生成、揭示 12 词、Copy、聚焦确认输入框、Cmd+V、Confirm and save，显示 `Wallet created`。
+- 通过正式 Node SDK，分别对两个新条目完成真实 macOS 系统认证读取。secp256k1 公钥和地址与创建成功页一致，独立 ethers 离线消息签名验证通过；Ed25519 公钥与成功页一致，独立 Node/OpenSSL 从所选 32 字节 seed 重建公钥并完成离线签名验证。只输出 `PASS_NEW_WALLET_SECP256K1_AUTH_AND_OFFLINE_SIGNATURE` 和 `PASS_NEW_WALLET_ED25519_AUTH_AND_OFFLINE_SIGNATURE`。
+- 随机助记词未输出到聊天、日志或文件；备份页检查在本机界面控制运行时过滤，仅返回步骤、按钮和词数。私钥不输出或持久化。测试只验证应用内复制确认，不替代长期离线备份；这两个随机测试钱包均不应入金。
+- 本次没有 RPC、真实资金交易，没有删除或覆盖钱包。未重跑取消认证、错误密码、Touch ID / 密码回退、锁屏读取、profile 续签或手工 profile 构建；历史结果不能代替本次验证。个人 Team 只保留在本机，不随代码提交。
+
+## 2026-10-22 Rust egui/eframe 迁移
+
+- 新增 `crates/app`：egui/eframe 界面、Apple Security / LocalAuthentication 绑定、创建 / 导入 / 备份确认和既有 helper 命令均由 Rust 实现。原 Swift 源码、头文件与 Swift 测试移出当前源码树，本机备份位于忽略的 `build/legacy/swift-app/`。
+- 保留 bundle ID、私有访问组、服务名 `local.keychain-wallet.mnemonic.v1` 与 version 1 JSON 格式；Keychain 查询继续指定 Data Protection、禁止同步，创建使用 `WhenUnlockedThisDeviceOnly` 与 `userPresence`，不会覆盖同名条目。读取使用新的 LAContext、复用时间 0，由 SecItemCopyMatching 触发认证；没有提前认证再读无保护条目的替代路径。
+- 迁移签名守卫、Hardened Runtime / ad hoc / 调试例外拒绝、core dump 禁用、固定错误码与 panic 输出限制。窗口激活的秘密输入阶段启用 Secure Event Input；清空输入撤销历史、不持久化 UI，原生按键入口阻止 winit 自动读剪贴板，只有新建确认框显式粘贴。Copy 保留 60 秒清理与保护后续新剪贴板内容的规则。
+- Node 的 TypeScript 入口、Rust 桥接和公开接口未改；stdin 公共 JSON 仍限制 2 KiB，fd 3 必须是 pipe/socket，私钥只写此通道，stdout 只含公开元数据。并发、缓存、超时和公私钥对应检查继续由原桥接负责。
+- Xcode 已构建并签名实际 Rust 可执行文件，`codesign --verify --strict` 与 `check-signing` 通过。依赖列表确认应用不再链接 Swift 运行库，签名访问组与迁移前一致；本机 Personal Team 设置保留，不提交个人配置。
+- SDK Release 构建、TypeScript 检查与 Node 集成测试 **10/10** 通过；Rust workspace 测试 **24/24**（app 11 + 桥接 6 + 密码学 7）、Python 配置测试 **4/4** 通过。测试覆盖两种曲线、旧存储 JSON、错误公钥 / 路径、系统随机生成 12 词但不落盘、备份不完整禁止保存、签名约束、认证上下文配置、剪贴板清理、请求大小与通道类型。
+- 实际启动新的 egui 窗口，经图形导入将公开 Hardhat 助记词保存为无资金测试条目 `rust-ui-import-20261022`，选择 Ed25519 路径 `m/44'/501'/0'/0'` 和空附加口令；公钥匹配独立参考，显示 `Wallet imported`。没有读取或显示随机钱包助记词。
+- 用户在本机完成两次系统认证；正式 Node SDK 经新 Rust 应用读取旧公开条目 `ui-import-20261021` 的 secp256k1 密钥，独立 ethers 地址核对通过；读取新版图形导入条目的 Ed25519 密钥，独立 Node/OpenSSL 核对公钥及离线签名通过。仅输出 `PASS_RUST_APP_LEGACY_KEYCHAIN_SECP256K1` 和 `PASS_RUST_APP_GUI_IMPORT_ED25519_OFFLINE_SIGNATURE`，未输出或保存密钥。
+- 迁移阶段当时未重跑完整随机钱包图形备份 / 确认（后续验证见上节）、取消或错误密码、Touch ID / 密码回退、锁屏读取、续签和无交互真实数据读取拒绝；相应自动化配置检查与旧版实际记录不能替代新版逐项人工验证。没有 RPC、真实资金签名或广播，没有删除或覆盖任何现有钱包。该阶段尚未提交，后续验证与界面更新合并提交。
+
 ## 2026-10-22 目录整理
 
 - Rust 源码归入 `crates/crypto`、`crates/node`，新增根 workspace 并共用 `Cargo.lock`。没有引入原锁文件之外的新依赖版本；共用的 `getrandom` 统一到原 Node 锁文件已有的 0.2.17。
@@ -109,7 +131,7 @@ SDK 构建、TypeScript 类型检查通过，Node 单元测试 **15/15 通过**�
 
 - 用户取消、密码错误、Touch ID 与密码回退各自的具体系统行为；不能从一次认证成功推断所有方式都验证过。
 - 锁屏后新进程读取、profile 过期续签及其他 macOS / 设备上的运行行为。
-- 真实资金和交易。Node 解锁后的私钥仍在业务进程内存中，不能防御被控制的业务代码；显式缓冲清零不保证 Swift / Foundation / JavaScript 的全部副本被擦除。
+- 真实资金和交易。Node 解锁后的私钥仍在业务进程内存中，不能防御被控制的业务代码；显式缓冲清零不保证 egui / Foundation / JavaScript 的全部副本被擦除。
 
 ## 复跑离线检查
 

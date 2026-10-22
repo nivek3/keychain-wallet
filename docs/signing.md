@@ -5,7 +5,7 @@ This project supports the free development-signing route. Apple lists macOS Keyc
 ## What is already prepared
 
 - Open `macos/KeychainWallet.xcodeproj`; no temporary app or separate profile-generation project is needed.
-- The target builds the actual Swift implementation and the existing Rust crypto library.
+- The target invokes `scripts/xcode-build-app.sh` to build the Rust egui/eframe application and its shared crypto crate, then packages and signs that executable. There is no Swift compilation step.
 - Automatic signing and the app's private Keychain group are configured. The Team is intentionally unset so you choose your own Personal Team.
 - The default Bundle ID is `dev.phcxc.KeychainWallet.a15e8e`. You can change it in the target's General tab before importing any wallet; the app identifier and access group follow that value.
 - Both configurations enable Hardened Runtime and disable `get-task-allow` injection. The shared Run scheme uses Release and does not attach a debugger.
