@@ -1,0 +1,21 @@
+import AppKit
+let board = NSPasteboard.withUniqueName()
+defer { board.releaseGlobally() }
+let clipboard = RecoveryPhraseClipboard(words: "public test sentinel", pasteboard: board)
+let button = NSButton()
+clipboard.copyPhrase(button)
+precondition(board.string(forType: .string) == "public test sentinel")
+precondition(button.title == "Copied")
+clipboard.clearTimer!.fire()
+precondition(board.string(forType: .string) == nil)
+clipboard.copyPhrase(button)
+board.clearContents()
+board.setString("new unrelated content", forType: .string)
+clipboard.clearTimer!.fire()
+precondition(board.string(forType: .string) == "new unrelated content")
+clipboard.copyPhrase(button)
+let old = clipboard.clearTimer!
+clipboard.copyPhrase(button)
+precondition(!old.isValid)
+clipboard.clearTimer!.fire()
+print("PASS_COPY_CLEAR_AND_PRESERVE_NEW_CLIPBOARD_CONTENT")

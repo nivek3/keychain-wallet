@@ -1,0 +1,16 @@
+[package]
+name = "wallet-crypto"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+bip39 = { version = "=2.2.0", features = ["zeroize"] }
+bip32 = { version = "=0.5.3", default-features = false, features = ["std", "secp256k1"] }
+ed25519-dalek-bip32 = "=0.3.0"
+ed25519-dalek = { version = "=2.2.0", features = ["zeroize"] }
+sha3 = "=0.10.8"
+zeroize = "=1.8.1"

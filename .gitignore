@@ -1,0 +1,32 @@
+node_modules/
+dist/
+build/
+target/
+*.provisionprofile
+*.p12
+.env*
+
+# Local signing, Xcode state, and source archives
+**/xcuserdata/
+*.xcuserstate
+.DS_Store
+__pycache__/
+*.pyc
+*.p8
+*.key
+*.pem
+*.cer
+*.pfx
+*.developerprofile
+*.zip
+*.mobileprovision
+*.xip
+*.xcarchive/
+DerivedData/
+.build/
+*.keychain*
+
+# Keep the build scripts even when a user-level ignore excludes scripts/.
+!/scripts/
+!/scripts/*.sh
+!/scripts/*.py

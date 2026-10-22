@@ -1,0 +1,85 @@
+// !$*UTF8*$!
+{
+    archiveVersion = 1;
+    classes = {};
+    objectVersion = 56;
+    objects = {
+        000000000000000000000001 = { isa = PBXBuildFile; fileRef = 000000000000000000000003; };
+        000000000000000000000002 = { isa = PBXBuildFile; fileRef = 000000000000000000000004; };
+        000000000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/main.swift; sourceTree = SOURCE_ROOT; };
+        000000000000000000000004 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WalletCore.swift; sourceTree = SOURCE_ROOT; };
+        000000000000000000000005 = { isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = SOURCE_ROOT; };
+        000000000000000000000006 = { isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KeychainWallet.entitlements; sourceTree = SOURCE_ROOT; };
+        000000000000000000000007 = { isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Wallet.xcconfig; sourceTree = SOURCE_ROOT; };
+        000000000000000000000008 = { isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = ../docs/signing.md; sourceTree = SOURCE_ROOT; };
+        000000000000000000000009 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KeychainWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
+        00000000000000000000000A = {
+            isa = PBXGroup;
+            children = (000000000000000000000003, 000000000000000000000004, 000000000000000000000005, 000000000000000000000006, 000000000000000000000007, 000000000000000000000008, 00000000000000000000000B);
+            sourceTree = "<group>";
+        };
+        00000000000000000000000B = { isa = PBXGroup; children = (000000000000000000000009); name = Products; sourceTree = "<group>"; };
+        00000000000000000000000C = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (000000000000000000000001, 000000000000000000000002);
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        00000000000000000000000D = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+        00000000000000000000000E = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+        00000000000000000000000F = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = ("$(SRCROOT)/../scripts/xcode-build-crypto.sh", "$(SRCROOT)/../Cargo.toml", "$(SRCROOT)/../crates/crypto/Cargo.toml", "$(SRCROOT)/../Cargo.lock", "$(SRCROOT)/../crates/crypto/src/lib.rs");
+            name = "Build Rust crypto";
+            outputPaths = ("$(BUILT_PRODUCTS_DIR)/libwallet_crypto.a");
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/bash;
+            shellScript = "bash \"$SRCROOT/../scripts/xcode-build-crypto.sh\"\n";
+        };
+        000000000000000000000010 = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = 000000000000000000000016;
+            buildPhases = (00000000000000000000000F, 00000000000000000000000C, 00000000000000000000000D, 00000000000000000000000E);
+            buildRules = ();
+            dependencies = ();
+            name = KeychainWallet;
+            productName = KeychainWallet;
+            productReference = 000000000000000000000009;
+            productType = "com.apple.product-type.application";
+        };
+        000000000000000000000011 = {
+            isa = PBXProject;
+            attributes = {
+                BuildIndependentTargetsInParallel = 1;
+                LastUpgradeCheck = 2710;
+                TargetAttributes = {
+                    000000000000000000000010 = {
+                        CreatedOnToolsVersion = 27.1;
+                        ProvisioningStyle = Automatic;
+                        SystemCapabilities = { com.apple.Keychain = { enabled = 1; }; };
+                    };
+                };
+            };
+            buildConfigurationList = 000000000000000000000017;
+            compatibilityVersion = "Xcode 14.0";
+            developmentRegion = en;
+            hasScannedForEncodings = 0;
+            knownRegions = (en, Base);
+            mainGroup = 00000000000000000000000A;
+            productRefGroup = 00000000000000000000000B;
+            projectDirPath = "";
+            projectRoot = "";
+            targets = (000000000000000000000010);
+        };
+        000000000000000000000012 = { isa = XCBuildConfiguration; buildSettings = { CLANG_ENABLE_MODULES = YES; SDKROOT = macosx; }; name = Debug; };
+        000000000000000000000013 = { isa = XCBuildConfiguration; buildSettings = { CLANG_ENABLE_MODULES = YES; SDKROOT = macosx; }; name = Release; };
+        000000000000000000000014 = { isa = XCBuildConfiguration; baseConfigurationReference = 000000000000000000000007; buildSettings = {}; name = Debug; };
+        000000000000000000000015 = { isa = XCBuildConfiguration; baseConfigurationReference = 000000000000000000000007; buildSettings = {}; name = Release; };
+        000000000000000000000016 = { isa = XCConfigurationList; buildConfigurations = (000000000000000000000014, 000000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+        000000000000000000000017 = { isa = XCConfigurationList; buildConfigurations = (000000000000000000000012, 000000000000000000000013); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+    };
+    rootObject = 000000000000000000000011;
+}
