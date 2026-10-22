@@ -15,10 +15,14 @@ import { getKeyPair } from '../src/index.js';
 // Public Hardhat development wallet ONLY. Never fund these accounts.
 const address = '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266';
 const secondAddress = '0x70997970c51812dc3a010c7d01b50e0d17dc79c8';
+const thirdKey = HDNodeWallet.fromPhrase('test test test test test test test test test test test junk', '', "m/44'/60'/0'/0/2").privateKey;
+const thirdAddress = '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc';
 const secondKey = HDNodeWallet.fromPhrase('test test test test test test test test test test test junk', '', "m/44'/60'/0'/0/1").privateKey;
 const folder = mkdtempSync(join(tmpdir(), 'keychain-wallet-public-test-'));
 const helper = join(folder, 'mock.mjs');
-writeFileSync(helper, `#!${process.execPath}
+writeFileSync(
+  helper,
+  `#!${process.execPath}
 import { appendFileSync, writeSync } from 'node:fs';
 import { createECDH, createPrivateKey, createPublicKey } from 'node:crypto';
 let input = '';
@@ -36,7 +40,8 @@ if (request.name.startsWith('missing')) { process.stderr.write('NOT_FOUND\\n'); 
 if (request.name.startsWith('authfail')) { process.stderr.write('AUTHENTICATION_FAILED\\n'); process.exit(1); }
 if (request.name.startsWith('unknown')) { process.stderr.write('untrusted text containing a pretend secret'); process.exit(1); }
 const second = request.path === "m/44'/60'/0'/0/1";
-const hex = second ? '${secondKey.slice(2)}' : 'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+const third = request.path === "m/44'/60'/0'/0/2";
+const hex = third ? '${thirdKey.slice(2)}' : second ? '${secondKey.slice(2)}' : 'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 const ed = request.curve === 'ed25519';
 const key = ed
   ? Buffer.from(request.name.startsWith('zero') ? '00'.repeat(32) : request.path.endsWith("/1'") ? '01'.repeat(32) : '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'hex')
@@ -46,35 +51,38 @@ if (ed) {
   const privateKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), key]), format: 'der', type: 'pkcs8' });
   publicKey = createPublicKey(privateKey).export({ format: 'der', type: 'spki' }).subarray(-32);
 } else {
-  const ec = createECDH('secp256k1'); ec.setPrivateKey(key); publicKey = ec.getPublicKey();
+  const ec = createECDH('secp256k1'); ec.setPrivateKey(key); publicKey = ec.getPublicKey(undefined, request.name.startsWith('uncompressed-public') ? 'uncompressed' : 'compressed');
 }
 if (request.name.startsWith('invalid-key')) key.fill(255);
 writeSync(3, request.name.startsWith('short') ? key.subarray(1) : request.name.startsWith('overflow-key') ? Buffer.alloc(33) : key);
 process.stdout.write(JSON.stringify({name:request.name,path:request.path,
   curve:request.name.startsWith('cross-curve') ? (ed ? 'secp256k1' : 'ed25519') : request.curve,
-  publicKey:request.name.startsWith('wrong') ? 'invalid' : request.name.startsWith('mismatch') ? '0x' + '00'.repeat(ed ? 32 : 65) : '0x' + publicKey.toString('hex')}));
-`);
+  publicKey:request.name.startsWith('wrong') ? 'invalid' : request.name.startsWith('mismatch') ? '0x' + '00'.repeat(ed ? 32 : 33) : '0x' + publicKey.toString('hex')}));
+`
+);
 chmodSync(helper, 0o700);
 const options = (name: string) => ({ helperPath: helper, name, curve: 'secp256k1' as const, path: "m/44'/60'/0'/0/0" });
-const calls = (name: string) => readFileSync(helper + '.calls', 'utf8').split('\n').filter((v) => v === name).length;
+const calls = (name: string) =>
+  readFileSync(helper + '.calls', 'utf8')
+    .split('\n')
+    .filter((v) => v === name).length;
 const macOnly = { skip: process.platform !== 'darwin' };
 
 test('key pairs share one unlock; consumers use their own viem / ethers objects', macOnly, async () => {
   const explicit = options('concurrent');
   const { path: _path, ...defaultPath } = explicit;
-  const [one, two, three] = await Promise.all([
-    getKeyPair(explicit), getKeyPair(defaultPath), getKeyPair({ ...defaultPath, index: 0 }),
-  ]);
+  const [one, two, three] = await Promise.all([getKeyPair(explicit), getKeyPair(defaultPath), getKeyPair({ ...defaultPath, index: 0 })]);
   assert.equal(calls('concurrent'), 1);
   assert.deepEqual(Object.keys(one).sort(), ['privateKey', 'publicKey']);
   assert.match(one.privateKey, /^0x[0-9a-f]{64}$/);
-  assert.match(one.publicKey, /^0x04[0-9a-f]{128}$/);
+  assert.match(one.publicKey, /^0x0[23][0-9a-f]{64}$/);
   assert.deepEqual(one, two);
   assert.deepEqual(one, three);
   const viem = privateKeyToAccount(one.privateKey);
   const v5 = new Wallet5(two.privateKey);
   const v6 = new Wallet6(three.privateKey);
-  assert.equal(v6.signingKey.publicKey, one.publicKey);
+  assert.equal(v6.signingKey.compressedPublicKey, one.publicKey);
+  assert.equal(v5._signingKey().compressedPublicKey, one.publicKey);
   for (const account of [viem, v5, v6]) assert.equal(account.address.toLowerCase(), address);
   const message = 'public test only';
   assert.equal(utils.verifyMessage(message, await v5.signMessage(message)).toLowerCase(), address);
@@ -88,15 +96,31 @@ test('index selects a different key pair from the same wallet', macOnly, async (
   const second = await getKeyPair({ ...selection, index: 1 });
   assert.notEqual(first.publicKey, second.publicKey);
   assert.equal(new Wallet6(second.privateKey).address.toLowerCase(), secondAddress);
-  assert.equal(new Wallet6(second.privateKey).signingKey.publicKey, second.publicKey);
-  assert.equal(calls('index-pairs'), 2);
+  assert.equal(new Wallet6(second.privateKey).signingKey.compressedPublicKey, second.publicKey);
+  const third = await getKeyPair({ ...selection, index: 2 });
+  const explicit = await getKeyPair({ ...selection, path: "m/44'/60'/0'/0/2" });
+  assert.equal(new Wallet6(third.privateKey).address.toLowerCase(), thirdAddress);
+  assert.deepEqual(third, explicit);
+  assert.notEqual(third.publicKey, second.publicKey);
+  assert.equal(calls('index-pairs'), 3);
 });
 
 test('failure is sticky; no silent retry or environment fallback', macOnly, async () => {
-  for (const [name, code] of [['cancel-once', 'CANCELLED'], ['missing-once', 'NOT_FOUND'],
-    ['authfail-once', 'AUTHENTICATION_FAILED'], ['unknown-once', 'HELPER_FAILED'],
-    ['short-once', 'INVALID_HELPER_RESPONSE'], ['wrong-once', 'INVALID_HELPER_RESPONSE'],
-    ['invalid-key-once', 'INVALID_HELPER_RESPONSE'], ['cross-curve-once', 'INVALID_HELPER_RESPONSE'], ['mismatch-once', 'INVALID_HELPER_RESPONSE'], ['overflow-out-once', 'INVALID_HELPER_RESPONSE'], ['overflow-err-once', 'INVALID_HELPER_RESPONSE'], ['overflow-key-once', 'INVALID_HELPER_RESPONSE']]) {
+  for (const [name, code] of [
+    ['cancel-once', 'CANCELLED'],
+    ['missing-once', 'NOT_FOUND'],
+    ['authfail-once', 'AUTHENTICATION_FAILED'],
+    ['unknown-once', 'HELPER_FAILED'],
+    ['short-once', 'INVALID_HELPER_RESPONSE'],
+    ['wrong-once', 'INVALID_HELPER_RESPONSE'],
+    ['uncompressed-public-once', 'INVALID_HELPER_RESPONSE'],
+    ['invalid-key-once', 'INVALID_HELPER_RESPONSE'],
+    ['cross-curve-once', 'INVALID_HELPER_RESPONSE'],
+    ['mismatch-once', 'INVALID_HELPER_RESPONSE'],
+    ['overflow-out-once', 'INVALID_HELPER_RESPONSE'],
+    ['overflow-err-once', 'INVALID_HELPER_RESPONSE'],
+    ['overflow-key-once', 'INVALID_HELPER_RESPONSE'],
+  ]) {
     await assert.rejects(getKeyPair(options(name)), { message: code });
     await assert.rejects(getKeyPair(options(name)), { message: code });
     assert.equal(calls(name), 1);
@@ -104,8 +128,7 @@ test('failure is sticky; no silent retry or environment fallback', macOnly, asyn
 });
 
 test('invalid public selection fails before launching a helper', async () => {
-  for (const change of [{ path: 'm/0' }, { name: 'name\n' }, { path: "m/44'/60'/0'/0/0\n" },
-    { path: "m/44'/60'/2147483648'/0/0" }, { helperPath: 'relative' }, { index: 0 }, { curve: undefined }, { curve: 'p256' }]) {
+  for (const change of [{ path: 'm/0' }, { name: 'name\n' }, { path: "m/44'/60'/0'/0/0\n" }, { path: "m/44'/60'/2147483648'/0/0" }, { helperPath: 'relative' }, { index: 0 }, { curve: undefined }, { curve: 'p256' }]) {
     await assert.rejects(getKeyPair({ ...options('invalid'), ...change } as never), { message: 'Invalid wallet selection' });
   }
 });
@@ -118,12 +141,11 @@ test('fresh business processes independently unlock', macOnly, async () => {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { stdio: 'ignore' });
       child.on('error', reject);
-      child.on('close', (code) => code === 0 ? resolve() : reject(new Error('test child failed')));
+      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error('test child failed'))));
     });
   }
   assert.equal(calls('separate-process'), 2);
 });
-
 
 const edOptions = (name: string) => ({ helperPath: helper, name, curve: 'ed25519' as const, path: "m/44'/501'/0'/0'" });
 
@@ -141,9 +163,7 @@ test('Ed25519 returns a 32-byte seed and public key usable for offline signature
 
 test('curves and explicit Ed25519 paths have separate sessions', macOnly, async () => {
   const name = 'both-curves';
-  const [secp, ed, duplicate] = await Promise.all([
-    getKeyPair(options(name)), getKeyPair(edOptions(name)), getKeyPair(edOptions(name)),
-  ]);
+  const [secp, ed, duplicate] = await Promise.all([getKeyPair(options(name)), getKeyPair(edOptions(name)), getKeyPair(edOptions(name))]);
   assert.notEqual(secp.publicKey, ed.publicKey);
   assert.deepEqual(ed, duplicate);
   assert.equal(calls(name), 2);
@@ -162,7 +182,6 @@ test('zero Ed25519 seeds are valid; malformed and mismatched helper responses fa
     assert.equal(calls(name), 1);
   }
 });
-
 
 test('Rust authentication waits leave Node timers and filesystem workers responsive', macOnly, async () => {
   const pending = Promise.all(Array.from({ length: 4 }, () => getKeyPair(options('slow-concurrent'))));

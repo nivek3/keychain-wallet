@@ -1,48 +1,55 @@
-# Local setup with a free Personal Team
+# macOS signing
 
-This project supports the free development-signing route. Apple lists macOS Keychain Sharing as available to free Apple Developers. This is a capability statement, not proof that this app has completed real Keychain authentication with your account. Keep using a public, unfunded test wallet until those checks pass.
+The repository builds the Rust app with Cargo and packages it using `scripts/build-native.sh`. The script requires a code-signing identity in your login Keychain and a valid macOS provisioning profile authorizing the bundle identifier and private Keychain group.
 
-## What is already prepared
+## Personal Team
 
-- Open `macos/KeychainWallet.xcodeproj`; no temporary app or separate profile-generation project is needed.
-- The target invokes `scripts/xcode-build-app.sh` to build the Rust egui/eframe application and its shared crypto crate, then packages and signs that executable. There is no Swift compilation step.
-- Automatic signing and the app's private Keychain group are configured. The Team is intentionally unset so you choose your own Personal Team.
-- The default Bundle ID is `dev.phcxc.KeychainWallet.a15e8e`. You can change it in the target's General tab before importing any wallet; the app identifier and access group follow that value.
-- Both configurations enable Hardened Runtime and disable `get-task-allow` injection. The shared Run scheme uses Release and does not attach a debugger.
-- Run opens the English Create / Import setup flow. No wallet is saved until you complete that flow. The separate `check-signing` command still checks only public signing metadata.
-- No Apple account, Team ID, certificate private key, profile, or wallet secret is committed.
+A free Personal Team manages its App IDs, certificates, devices, and profiles through Xcode. Provisioning expires periodically. Xcode is needed for that account workflow, while this repository's app build uses Cargo and command-line signing. See [Apple's Personal Team documentation](https://developer.apple.com/help/account/basics/about-your-developer-account).
 
-## Your steps in Xcode
+To prepare signing assets:
 
-1. Open Xcode itself first and review/accept its license agreement if prompted. This machine has Xcode 27.1 installed and has completed the initial signing build. On a new machine, complete any required first-launch setup yourself, then open the project from this repository. If Xcode asks whether to trust this project, review the local Rust build script before trusting it; that script builds the locked Rust dependencies.
-2. In Xcode Settings, open the Apple Accounts / Accounts pane and sign in to your Apple Account. Complete password and verification-code prompts locally.
-3. Select the blue project icon, then the **KeychainWallet target** and **Signing & Capabilities**. Keep **Automatically manage signing** enabled and select **your name (Personal Team)** for Team. Keychain Sharing is already configured; do not add a second group.
-4. Select the **KeychainWallet** scheme and **My Mac**, then press **Command-B**. Xcode can create/manage the development certificate and profile. If a certificate is needed, use your account's **Manage Certificates → + → Apple Development**. Do not export or send its private key.
-5. Press **Command-R** with the shared scheme to open **Create a new wallet / Import an existing wallet**. Creation requires backing up and re-entering the new recovery phrase before saving. Import requires an independently known Ethereum address (secp256k1) or 32-byte hex public key (Ed25519). For a separate signing check, run the signed executable with `check-signing`; expected output includes `"status":"SIGNING_CONFIGURATION_OK"`. This check alone does not prove the Keychain ACL or authentication fallback works.
-6. Under **Products**, right-click **KeychainWallet.app → Show in Finder** to locate the signed app. Keep the entire app bundle intact. Node automatically finds this package's local Xcode Release build, or an installed app in `~/Applications` / `/Applications`; business code can omit `helperPath`. Command-line management still uses the executable path. A nonstandard installation can set `helperPath` explicitly.
+1. Sign in to your Apple Account in Xcode Settings.
+2. Create a temporary macOS App project outside this repository. Set the desired bundle ID, select your Personal Team, enable automatic signing, and configure Keychain Sharing with the app's private access group.
+3. Build for My Mac. Locate the signed app through Products → Show in Finder. Its `Contents/embedded.provisionprofile` can be used while valid, with the matching Apple Development signing identity.
 
-On this machine Xcode is at `/Applications/Xcode.app`. The system command-line selection may still point to Command Line Tools; this does not prevent building inside Xcode. For terminal project inspection/builds use `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` on the command, rather than changing the global toolchain setting.
+If signing assets already exist, use them directly. Do not export certificate private keys or store profiles, passwords, or wallet secrets in Git.
 
-First builds may download public crates from crates.io. Rust is found through `$HOME/.cargo/bin`; its existing toolchain must be installed. This local project builds only the current Mac's architecture.
+## Build
 
-## If signing fails
+From the repository root:
 
-Copy the error message, without passwords, tokens, private keys, or wallet words. Common conditions to check are an unset Team, a Bundle ID already taken, unavailable profile authorization, expired signing assets, or an incomplete Apple Account login.
+```sh
+bash scripts/build-native.sh \
+  'Apple Development: Your Name (TEAMID)' \
+  '/absolute/path/App.provisionprofile' \
+  'com.example.keychain-wallet'
+```
 
-Do not turn off the private Keychain group, user-presence requirement, Hardened Runtime, or the runtime signing checks to get past an error. Do not enable **Debug executable**, `get-task-allow`, or **Disable Library Validation** for wallet use. The runtime intentionally rejects those unsafe configurations.
+The script reads the public profile metadata, validates its expiry and authorization, builds the Rust executable, embeds the profile, signs with Hardened Runtime, and verifies the signature. The profile's App Identifier Prefix determines the private access group; it is not assumed to equal Team ID. The output is `build/keychain-wallet.app`. An existing output is replaced only after the new bundle passes signature verification.
 
-If `SIGNING_CONFIGURATION` is returned, inspect whether the app contains `Contents/embedded.provisionprofile` and whether the signed entitlements match the app identifier and its one private Keychain group. Generated assets, rather than a successful compile alone, determine whether this route is usable.
+```sh
+open build/keychain-wallet.app
+build/keychain-wallet.app/Contents/MacOS/keychain-wallet check-signing
+```
 
-## After signing succeeds
+`check-signing` validates public signing configuration. It does not establish that real Keychain authentication succeeds. Use an unfunded test wallet in a logged-in graphical session to check authentication and cancellation.
 
-Follow the [README](../README.md) to import the public Hardhat test mnemonic through the local secure fields. Verify real macOS authentication, cancellation/failure, address matching, independent business processes, and a no-interaction Keychain read rejection before importing a real wallet. Never fund the public test address.
+For local Node use, the SDK discovers `build/keychain-wallet.app` from this source checkout. For a separate installation, place the complete app in `~/Applications` or `/Applications`, or specify the executable's absolute path as `helperPath`.
 
-Personal Team is development signing and has provisioning/renewal limits. Check the actual profile's expiration and re-sign/rebuild as required. Rebuilding the same app should preserve its Bundle ID and access group. Do not delete the wallet entry during renewal; retain an independent offline backup.
+## Renewal
 
-## Apple references
+Renew Personal Team assets through Xcode, then rerun the script with the current profile and matching identity. Keep the bundle ID and authorized access group stable when retaining saved wallets. Profiles do not back up wallet data; keep an independent offline recovery backup.
 
-- [macOS supported capabilities](https://developer.apple.com/help/account/reference/supported-capabilities-macos/)
-- [Personal Team and membership limitations](https://developer.apple.com/help/account/basics/about-your-developer-account)
-- [Xcode signing workflow](https://help.apple.com/xcode/mac/current/en.lproj/dev60b6fbbc7.html)
-- [Why base debug entitlements are disabled](https://developer.apple.com/documentation/security/resolving-common-notarization-issues)
-- [macOS Keychain implementations and profiles](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+Do not disable signing checks, the private Keychain group, Hardened Runtime, or user-presence authentication to bypass errors. Ad hoc signing is insufficient. The script does not notarize or publish the app.
+
+References: [command-line signing](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/), [Keychain implementations](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
+
+## Public distribution
+
+The current script builds for the host Mac and does not notarize the app. A Personal Team development build is not a general-purpose download for other users.
+
+For a downloadable release, the publisher needs Developer ID signing through the Apple Developer Program, the entitlements/profile required by this app, notarization, and a stapled ticket. Publish separately identified Apple Silicon and Intel builds, or a validated universal app. Test Keychain creation, read, cancellation, and deletion on a different Mac before advertising the download. End users of that release do not need Xcode, Rust, or their own developer account.
+
+The npm native addon and the signed app are separate artifacts. A universal addon does not make a host-only app universal. Keep the production bundle ID and Keychain access group stable across updates.
+
+See [Apple Developer ID distribution](https://developer.apple.com/developer-id/) and [notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).

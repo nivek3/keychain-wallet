@@ -9,19 +9,20 @@ export type WalletSelection = {
   helperPath?: string;
   name: string;
 } & (
-  /** index defaults to 0; path and index cannot be combined. */
-  | { curve: 'secp256k1'; index?: number; path?: string }
-  /** SLIP-0010: an explicit hardened-only path is required. */
+  | ({ curve: 'secp256k1' } & (
+      | { index?: number; path?: never }
+      | { path: string; index?: never }
+    ))
+  /** SLIP-0010: callers choose the full hardened derivation path. */
   | { curve: 'ed25519'; path: string; index?: never }
 );
 
 export interface KeyPair {
-  /** secp256k1: 65-byte uncompressed key (0x04 prefix). Ed25519: 32-byte public key. */
+  /** secp256k1: 33-byte compressed key (0x02/0x03 prefix). Ed25519: 32-byte public key. */
   publicKey: `0x${string}`;
   /** 32-byte secp256k1 scalar or Ed25519 seed; keep in memory and never log it. */
   privateKey: `0x${string}`;
 }
-
 
 type NativeBridge = { getKeyPair(selection: WalletSelection, packageRoot: string, home: string): Promise<KeyPair> };
 const require = createRequire(import.meta.url);
@@ -32,11 +33,15 @@ export async function getKeyPair(selection: WalletSelection): Promise<KeyPair> {
   if (!isMainThread) throw new Error('Use the wallet in the main Node thread');
   if (process.platform !== 'darwin') throw new Error('macOS is required');
   if (!bridge) {
-    try { bridge = require('../dist/keychain-wallet.node') as NativeBridge; }
-    catch { throw new Error('KEYCHAIN_WALLET_BRIDGE_NOT_BUILT'); }
+    try {
+      bridge = require('../dist/keychain-wallet.node') as NativeBridge;
+    } catch (cause) {
+      throw new Error('KEYCHAIN_WALLET_BRIDGE_NOT_BUILT', { cause });
+    }
   }
-  try { return await bridge.getKeyPair(selection, packageRoot, homedir()); }
-  catch (error) {
+  try {
+    return await bridge.getKeyPair(selection, packageRoot, homedir());
+  } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'InvalidArg') {
       throw new Error('Invalid wallet selection');
     }

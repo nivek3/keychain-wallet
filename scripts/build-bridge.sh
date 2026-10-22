@@ -7,6 +7,24 @@ if [[ $(uname -s) != Darwin ]]; then
   exit 1
 fi
 export CARGO_TARGET_DIR="$root/target"
-cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-bridge
-mkdir -p "$root/dist"
-cp "$root/target/release/libwallet_bridge.dylib" "$root/dist/keychain-wallet.node"
+export MACOSX_DEPLOYMENT_TARGET=14.0
+mkdir -p "$root/node/dist"
+if [[ ${1:-} == --universal && $# == 1 ]]; then
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-bridge --target "$target"
+  done
+  output=$(mktemp "$root/node/dist/.bridge.XXXXXX")
+  trap 'rm -f "$output"' EXIT
+  lipo -create "$root/target/aarch64-apple-darwin/release/libwallet_bridge.dylib" \
+    "$root/target/x86_64-apple-darwin/release/libwallet_bridge.dylib" -output "$output"
+  lipo -verify_arch arm64 x86_64 "$output"
+  codesign --force --sign - "$output"
+  chmod 644 "$output"
+  mv "$output" "$root/node/dist/keychain-wallet.node"
+elif [[ $# == 0 ]]; then
+  cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-bridge
+  cp "$root/target/release/libwallet_bridge.dylib" "$root/node/dist/keychain-wallet.node"
+else
+  echo 'Usage: build-bridge.sh [--universal]' >&2
+  exit 1
+fi

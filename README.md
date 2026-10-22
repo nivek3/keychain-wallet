@@ -1,235 +1,132 @@
-# macOS Keychain Wallet
+# keychain-wallet
 
-**English** | [中文](README_ZH.md)
+**macOS Keychain-backed keys for Ethereum and Solana.**
 
-A local key provider for macOS and Node.js. A Rust egui/eframe application handles wallet creation/import, native macOS secure input, Keychain storage, and system authentication. The shared Rust crypto crate derives secp256k1 and SLIP-0010 Ed25519 keys. A napi-rs bridge handles communication, authentication serialization, in-memory caching, and key-pair verification. TypeScript exposes a small interface; your application uses its own wallet or signing library.
+[中文](README_ZH.md) · [Node.js API](node/README.md) · [Signing](docs/signing.md) · [Testing](docs/testing.md)
 
-**Status:** Personal Team signing, real Keychain storage and authenticated reads, both curves, and offline signing have been verified with unfunded test wallets on the development Mac. The October 22 Rust desktop migration passed the signed macOS build, automated checks, GUI Ed25519 import, and full new-wallet backup/confirmation flows for both curves. Authenticated Node reads and offline signatures matched the created wallets. The English UI uses compact macOS-style forms and blue primary buttons. The UI uses egui/eframe; storage and authentication currently support macOS only. See the dated [verification record (Chinese)](docs/verification.md) for the exact scope. No funded transactions or RPC broadcasts were tested.
-
-## Repository layout
-
-```text
-keychain-wallet/
-├── Cargo.toml / Cargo.lock       # Rust workspace and shared lockfile
-├── crates/
-│   ├── crypto/                  # Shared key derivation
-│   ├── app/                     # egui UI, macOS Keychain, authentication, helper CLI
-│   └── node/                    # napi-rs bridge, IPC, and memory cache
-├── macos/
-│   ├── KeychainWallet.xcodeproj/
-│   ├── Tests/                   # Python signing and bundle config tests
-│   └── …                        # Info.plist, entitlements, xcconfig
-├── src/index.ts                 # Node API and native-module loading
-├── test/                        # Node integration tests
-├── examples/
-├── scripts/                     # Build and check entry points
-├── docs/                        # Signing guide and verification record
-└── package.json
-```
-
-`npm run build` produces JavaScript, type declarations, and `dist/keychain-wallet.node`. Cargo normally writes to `target/`; Xcode outputs remain under `build/xcode/`. The app and Node addon use the `release` profile. Xcode invokes Cargo to build `wallet-app`, copies the Rust executable into the app bundle, and signs it. No Swift sources or bridging header are used.
-
-## Requirements and signing
-
-- macOS 14 or later, running in a logged-in user's graphical session.
-- Xcode, Rust/Cargo, Node.js 22 or later, npm, and Python 3.
-- A valid signing identity and provisioning profile authorizing the app identifier and private Keychain group. Xcode can manage local development signing with a free Personal Team.
-
-Open `macos/KeychainWallet.xcodeproj`, sign in to your Apple Account in Xcode Settings, and select your **Personal Team** under the **KeychainWallet target → Signing & Capabilities**. Keep **Automatically manage signing** enabled. Select **My Mac**, build with **Command-B**, then run with **Command-R**. Follow the [Personal Team setup guide](docs/signing.md) for the full steps and troubleshooting.
-
-The shared Run scheme uses Release without a debugger and opens the English Create / Import flow. Keep the entire `.app` bundle intact. The local Xcode Release build is at:
-
-```text
-build/xcode/Build/Products/Release/KeychainWallet.app
-```
-
-The committed project leaves the Team unset. Choose your own Team locally. Signing assets and wallet secrets are not committed. Personal Team profiles expire; check the actual profile and rebuild/re-sign when needed. Preserve the bundle ID, private access group, and authorized signing identity to retain access to existing entries, and keep an independent offline recovery backup.
-
-The app uses the **Data Protection Keychain** and an embedded provisioning profile. Ad hoc signing is insufficient. A successful compile or `check-signing` result alone does not prove real Keychain authentication works. SSH, headless sessions, daemons, and CI tests cannot establish that the interactive flow works on your Mac. Touch ID is optional; verify password fallback on the actual machine.
-
-## Create or import a wallet
-
-Open the signed app and choose one of its two entry points:
-
-1. **Create a new wallet:** choose a curve and local name. secp256k1 defaults to `m/44'/60'/0'/0/0`; Ed25519 requires an explicit path with every level hardened (ending in `'`). Choose a BIP-39 passphrase or explicitly select **I use no BIP-39 passphrase**. Back up the generated 12-word English recovery phrase and re-enter it in full before saving.
-2. **Import an existing wallet:** choose a curve, name, and path. For secp256k1, provide an independently known Ethereum address; for Ed25519, provide the independently known 32-byte public key as `0x` hex, not a base58 chain address. Enter the recovery phrase and optional passphrase manually. A mismatch prevents saving.
-
-The success page shows the name, curve, path, and public key; secp256k1 also shows an address. Cancelling does not create an entry. An existing name returns `ALREADY_EXISTS` and is never overwritten. To replace a wallet, import under a new name and verify it before separately deciding whether to delete the old entry.
-
-A BIP-39 passphrase is **not your Mac login password or a wallet application's unlock password**. Leaving it empty is supported through the explicit checkbox. Nonempty passphrases require confirmation; spaces are preserved and BIP-39 NFKD normalization applies. A different passphrase derives a different wallet. Here it is stored with the recovery phrase in the same authenticated entry, so it is not an independent second authentication factor. Only English BIP-39 phrases are accepted.
-
-Secret entry enables macOS Secure Event Input while the window is active. Password fields are masked, their undo history is cleared, and app-state persistence is disabled. Native key-event interception blocks clipboard shortcuts before winit can read the clipboard; the confirmation page handles permitted paste explicitly. File drops cannot fill inputs.
-
-The creation backup page offers **Copy recovery phrase**. Only the new-wallet confirmation field permits **Paste recovery phrase / Cmd+V**. Import and passphrase fields disable copying, cutting, and pasting. While the app remains running, it attempts to clear its copied phrase after 60 seconds without clearing newer clipboard content. Clipboard managers and other apps may retain copies; clearing does not revoke those copies. Keep an offline backup. There is no routine recovery-phrase export command.
-
-Start with an unfunded test wallet. Never send a real recovery phrase, passphrase, or private key to chat or place it in shell arguments, environment variables, or configuration files.
-
-## Use from Node.js / TypeScript
-
-Build this repository, then install the local package from your application:
-
-```sh
-# In this repository:
-npm ci --ignore-scripts
-npm run build
-
-# In your Node application; replace with the repository's actual path:
-npm install /absolute/path/keychain-wallet
-```
-
-The package is ESM. CommonJS callers can use `await import('macos-keychain-wallet')`.
+Store a recovery phrase in macOS Keychain. Authenticate with Touch ID or your Mac password, then use the derived key with your own viem, ethers, or Ed25519 code.
 
 ```ts
-import { getKeyPair } from 'macos-keychain-wallet';
-
-const { publicKey, privateKey } = await getKeyPair({
-  name: 'demo',
-  curve: 'secp256k1',
-  index: 0, // Optional: 0 selects the first account key.
-});
-```
-
-`curve` is required. For Ed25519, pass a complete SLIP-0010 path:
-
-```ts
-const { publicKey, privateKey } = await getKeyPair({
-  name: 'demo',
-  curve: 'ed25519',
-  path: "m/44'/501'/0'/0'",
-});
-```
-
-Use the exact path convention of the wallet you are restoring. A curve alone does not define a chain or wallet's path, and this implementation does not support every Ed25519 derivation scheme. The same saved phrase and passphrase can derive either curve without being imported again; their master keys use each standard's domain separation.
-
-The result contains only two `0x` hex strings. **Do not log the result or the private key.**
-
-| Curve | `privateKey` | `publicKey` |
-| --- | --- | --- |
-| `secp256k1` | 32-byte private scalar | 65-byte uncompressed public key, starting with `0x04` |
-| `ed25519` | 32-byte seed for the selected child key | 32-byte public key |
-
-An Ed25519 private key here is not the BIP-39 root seed, an expanded scalar, or a 64-byte SDK key pair. Use a downstream SDK import method that accepts a 32-byte seed.
-
-| Selection | Rules |
-| --- | --- |
-| `name` | Required local wallet name. 1–64 ASCII characters; start with a letter or digit, followed by letters, digits, `.`, `_`, or `-`. |
-| `curve` | Required: `secp256k1` or `ed25519`. No automatic curve detection. |
-| secp256k1 `index` | Optional integer from 0 through 2³¹−1, default 0. Derives `m/44'/60'/0'/0/index`. |
-| secp256k1 `path` | Optional full `m/44'/60'/account'/change/index` path; `change` is 0 or 1 and numeric components are below 2³¹. Cannot be combined with `index`. |
-| Ed25519 `path` | Required; at least one level after `m`, every level hardened, each value below 2³¹. `index` is rejected. |
-| `helperPath` | Optional absolute path to the signed app's executable for a nonstandard installation. |
-
-Paths are limited to 128 bytes. `getKeyPair` does not require `address` or `expectedAddress`. The GUI import flow still verifies an independently known address or public key.
-
-The SDK discovers the helper in this order:
-
-1. `~/Applications/KeychainWallet.app`
-2. `/Applications/KeychainWallet.app`
-3. This package's `build/xcode/Build/Products/Release/KeychainWallet.app`
-
-It does not search the working directory or `PATH`. An explicitly selected broken helper does not silently fall back to another app. A packaged installation needs an installed app or an explicit `helperPath`, since build outputs are not part of the npm package. Rebuild the native addon when changing Mac architecture; there is no automatic binary download or postinstall build.
-
-Your application owns address formatting, signing, and RPC access. For example, after obtaining `privateKey`:
-
-```ts
-// viem
-import { privateKeyToAccount } from 'viem/accounts';
-const account = privateKeyToAccount(privateKey);
-
-// ethers v6 (v5 also provides Wallet)
+import { getKeyPair } from 'keychain-wallet';
 import { Wallet } from 'ethers';
-const signer = new Wallet(privateKey);
+
+const { privateKey } = await getKeyPair({
+  name: 'trading', // Create or import this wallet in the app first.
+  curve: 'secp256k1',
+  index: 2,       // m/44'/60'/0'/0/2
+});
+
+const wallet = new Wallet(privateKey);
+console.log(wallet.address); // Never log the private key or wallet object.
 ```
 
-See the [viem](examples/viem.ts), [ethers v5](examples/ethers-v5.ts), and [ethers v6](examples/ethers-v6.ts) examples. These wallet libraries are chosen by the application, not wrapped by this SDK.
+**Status: source preview.** Build instructions are available today. A notarized app download and a verified npm release are not provided by this checkout. Start with an unfunded test wallet; the project has not undergone an independent security audit.
 
-## Authentication and caching
+## What it does
 
-Keychain entries use the signed app's private access group, `.userPresence`, and `WhenUnlockedThisDeviceOnly`, with iCloud synchronization disabled. The access-control requirement is attached to the entry itself.
+- Creates and imports English BIP-39 recovery phrases with an optional passphrase.
+- Stores wallets behind macOS system authentication and a private Keychain access group.
+- Lists wallet names and default Ethereum / Solana addresses without unlocking secrets.
+- Reveals a recovery phrase or deletes a wallet after authentication and explicit user action.
+- Returns secp256k1 or SLIP-0010 Ed25519 key pairs through a small Node.js API.
 
-On the first request, the Rust bridge starts a short-lived native helper. The helper creates a fresh `LAContext` with authentication reuse disabled; `SecItemCopyMatching` triggers system authentication. macOS chooses Touch ID or device-owner password. The tool does not collect your Mac password.
+Useful for local scripts and developer tools that would otherwise keep a seed phrase or private key in a file. Once a key is returned, the calling process can use and retain it. This is a local key provider, not a hardware wallet or a remote signing service.
 
-Only the selected 32-byte private key goes through fd 3, a private pipe/socketpair created by Node. stdout carries public metadata. The recovery phrase, BIP-39 root seed, and passphrase are not sent to Node. The bridge checks the returned public/private key correspondence using k256 or ed25519-dalek. The app and SDK must be upgraded together; older helpers without the required curve/public-key metadata are rejected. Public requests are limited to 2 KiB, and a 120-second authentication timeout terminates the helper.
+## How it works
 
-Within one loaded Rust module instance, requests for the same helper, name, curve, and resolved path share the result. Authentication is serialized; concurrent matching requests share one read. Both success and failure remain cached for the process lifetime. Fix the cause and restart the business process after a cached failure. Different processes and different derived accounts authenticate separately. Loading another copy of the native module is outside this deduplication guarantee.
-
-Call from Node's main thread; worker-thread calls are rejected. Authentication waits use Rust's blocking task pool rather than Node's libuv file-operation pool. There is no background service, network listener, shared unlock state, or disk cache. Locking the screen does not revoke a private key already returned to the application.
-
-Errors use fixed messages such as `CANCELLED`, `AUTHENTICATION_FAILED`, `NOT_FOUND`, `SIGNING_CONFIGURATION`, `INVALID_HELPER_RESPONSE`, and `HELPER_START_FAILED`. Missing app/module errors are `KEYCHAIN_WALLET_APP_NOT_FOUND` and `KEYCHAIN_WALLET_BRIDGE_NOT_BUILT`. Cancellation and incorrect passwords can map to the same authentication error. Failures do not fall back to `.env` or expose raw helper errors.
-
-## Build and offline checks
-
-Run these from the repository root:
-
-```sh
-npm ci --ignore-scripts
-npm run build
-npm run check
-npm test
-python3 -m unittest discover -s macos/Tests -p 'test_*.py'
-bash scripts/check-native.sh
+```mermaid
+flowchart LR
+    A[Your Node.js script] --> B[Native bridge]
+    B --> C[Signed macOS app]
+    C --> D[System authentication]
+    D --> E[macOS Keychain]
+    E --> C
+    C -->|Derived key pair| B
+    B --> A
 ```
 
-`npm ci` uses `package-lock.json`; Rust scripts use the root `Cargo.lock` with `--locked`. Installing dependencies may contact npm and crates.io. There is no JavaScript cryptography fallback when Rust is unavailable.
+The app owns Keychain access. The npm package starts the app's background mode when it needs a key; you do not need to keep a window open. Installing the npm package alone does not install the app.
 
-Use Xcode for automatically managed signing. If you already have a suitable certificate and profile, the manual build alternative is:
+## Try it from source
 
-```sh
-# Public signing configuration only; replace all three values.
-bash scripts/build-native.sh \
-  'Apple Development: Your Name (TEAMID)' \
-  '/absolute/path/Wallet.provisionprofile' \
-  'com.yourname.KeychainWallet'
+You need macOS 14+, Rust, Apple command-line development tools, Python 3, Node.js 22+, and the pnpm version pinned in `node/package.json`. The signed app also needs a certificate and provisioning profile: follow [the Personal Team setup](docs/signing.md) for local development. A paid Apple Developer Program membership is needed for Developer ID signing and notarized distribution; users of a future signed release will not need their own developer account.
+
+1. Clone the repository:
+
+   ```sh
+   git clone https://github.com/nivek3/keychain-wallet.git
+   cd keychain-wallet
+   ```
+
+2. Build the app using your signing identity, profile, and authorized bundle ID:
+
+   ```sh
+   bash scripts/build-native.sh \
+     'Apple Development: Your Name (TEAMID)' \
+     '/absolute/path/App.provisionprofile' \
+     'com.example.keychain-wallet'
+   open build/keychain-wallet.app
+   ```
+
+3. Click **+** and create or import a wallet named `trading`. For a new wallet, back up and confirm all recovery words. For import, supply an independently known Ethereum address or Ed25519 public key to verify the restored account. Example names are not created automatically.
+
+4. Build the SDK and run an example:
+
+   ```sh
+   pnpm --dir node install --frozen-lockfile --ignore-scripts
+   pnpm --dir node run build
+   cd node
+   node --import tsx examples/ethers-v6.ts trading 2
+   ```
+
+   Complete the macOS authentication prompt. The example prints the Ethereum address for index `2`. Other examples: [ethers v5](node/examples/ethers-v5.ts), [viem](node/examples/viem.ts), [Ed25519](node/examples/ed25519.ts).
+
+For another Node project, install the built SDK with `npm install /absolute/path/keychain-wallet/node`. Put the complete app bundle in `~/Applications` or `/Applications`, or pass its executable as `helperPath`. See the [API and troubleshooting guide](node/README.md).
+
+## Derivation
+
+`curve` is required. Derivation paths belong to the caller; recovering an existing account requires the original path and BIP-39 passphrase.
+
+| Curve | Selection | Result |
+| --- | --- | --- |
+| `secp256k1` | `index: 2` | `m/44'/60'/0'/0/2`; index defaults to `0` |
+| `secp256k1` | Explicit EVM `path` | Uses that path; do not also pass `index` |
+| `ed25519` | Explicit hardened-only `path` | Uses that path; no implicit account-path choice |
+
+```ts
+const keys = await getKeyPair({
+  name: 'trading',
+  curve: 'ed25519',
+  path: "m/44'/501'/2'/0'",
+});
 ```
 
-This script creates a new app bundle, embeds the profile, enables Hardened Runtime, and signs it. It does not register an App ID, download certificates, export private keys, notarize, or publish the app. The profile's App Identifier Prefix is not assumed to equal its Team ID. Only the app identifier, Team identifier, and one private Keychain group are signed; debug entitlements are not injected. Runtime checks reject invalid/ad hoc signing, a missing profile, a wrong access group, missing Hardened Runtime, and unsafe debugging entitlements. The operating system makes the final entitlement-authorization decision.
+secp256k1 returns a 32-byte private scalar and a 33-byte compressed public key. Ed25519 returns a 32-byte child seed and a 32-byte public key. Both fields are `0x` hex strings. Ed25519 keys must be used with Ed25519 tooling, not ethers `Wallet`.
 
-The dated [verification record (Chinese)](docs/verification.md) separates the earlier directory refactor from this Rust desktop migration. For the migration, the signed Rust app imported an unfunded public Ed25519 test wallet, and the unchanged Node SDK read both a legacy secp256k1 entry and that new Ed25519 entry through real macOS authentication; public-key matching and offline signature checks passed. Automated checks cover request limits, transport restrictions, derivation vectors, the complete-backup confirmation gate, signing guards, authentication-context configuration, and clipboard expiration. The follow-up GUI checks completed random-wallet generation, reveal, Copy, confirmation, and save for both curves: secp256k1 used the Paste button, and Ed25519 used Cmd+V. An incorrect confirmation was rejected, and a separate read confirmed that no entry had been saved. Authenticated reads and independent offline signatures matched both success pages. These generated test wallets have no permanent offline recovery backup and must remain unfunded. The manual-profile build path was not repeated.
+## Security boundaries
 
-The earlier npm audit reported 14 low-severity findings in the ethers v5 development dependency chain; this documentation change does not constitute a fresh dependency or security audit. No npm production dependencies does not mean the Rust dependencies or application wallet libraries have been audited.
+- Keychain uses `WhenUnlockedThisDeviceOnly`, user-presence access control, and a private access group. The display cache holds only names and public addresses.
+- Recovery phrases are masked by default. Reveals expire after 60 seconds and clear on focus loss, navigation, or Hide. Explicit copies are cleared after 60 seconds while the app runs, before blocking authentication, or on normal exit, provided the clipboard still contains the app's latest copy. Copies retained by other software cannot be revoked.
+- The Node process caches successful and failed unlocks for each selection. Restart it after fixing a failed lookup or cancelling authentication. Deleting a wallet or locking the Mac does not revoke keys already returned to a process.
+- The SDK requires a logged-in macOS session for interactive authentication. It does not target browsers, Linux/Windows servers, or unattended jobs.
+- Keep an independent offline recovery backup. A BIP-39 passphrase changes the wallet; it is not the Mac login password. Never share secrets in issues or logs.
 
-## Public CLI management
+## Development
 
-The CLI uses the executable inside the signed bundle. The following names, paths, and address are public test data:
-
-```sh
-WALLET_HELPER='/absolute/path/KeychainWallet.app/Contents/MacOS/KeychainWallet'
-
-# Opens secure local import fields for an unfunded public Hardhat account.
-"$WALLET_HELPER" import demo "m/44'/60'/0'/0/0" \
-  '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
-
-# Lists public names without reading secrets; fails if attributes require interaction.
-"$WALLET_HELPER" list
-
-# Authenticates, derives, and outputs only an address matching this expected value.
-"$WALLET_HELPER" address demo "m/44'/60'/0'/0/0" \
-  '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
-
-# Only when intentionally deleting an entry: local confirmation and authentication.
-"$WALLET_HELPER" delete demo
+```text
+crates/app/       Rust desktop app and macOS Keychain integration
+crates/crypto/    BIP-39 and key derivation
+crates/node/      napi-rs bridge
+node/            SDK, examples, and integration tests
+scripts/         Build and packaging tools
+tests/           Packaging tests
+docs/            Signing and validation guides
 ```
 
-For this public test account only, manually enter `test test test test test test test test test test test junk` in the import window and select **I use no BIP-39 passphrase**. **Never fund this public account.** For a real import, independently obtain the expected address/public key from the existing wallet or a trusted offline backup. Do not fill it from this tool's own derived output.
+See [testing](docs/testing.md) for local checks and [Node packaging](node/README.md#development-and-publishing) for the npm release process. The app build uses Cargo and scripts; Xcode is needed for Personal Team provisioning, not as a project build system.
 
-The legacy `import` / `address` CLI supports only secp256k1 and Ethereum addresses; use the GUI or Node SDK for both curves. Address comparison is case-insensitive by bytes; it does not claim to validate EIP-55 input checksums. Secret input is never read from arguments, files, environment variables, or the clipboard during import.
+Bug reports should include macOS version, CPU architecture, Node/Bun version, app/SDK version, and the error code. Use public test fixtures for reproductions. Please report security issues through [GitHub private vulnerability reporting](https://github.com/nivek3/keychain-wallet/security/advisories/new).
 
-## Security boundaries and remaining checks
+## License
 
-This tool reduces long-lived secret exposure in `.env` files, configuration backups, and source trees. It protects storage and requires system authentication; the selected private key still enters Node memory and any downstream wallet objects.
-
-It does not protect against malicious application code or dependencies, attackers who can read process memory, a replaced trusted helper, system compromise, keylogging, or screen monitoring. The authentication dialog identifies the helper and requested account, not a trusted Node caller. Other trusted programs authorized for the same signing/access group are inside the security boundary.
-
-The native app disables core dumps and replaces panic output with a fixed error code. Rust zeroizes owned recovery-phrase, passphrase, seed, and private-key buffers. Complete erasure of egui/OS/Foundation temporaries, library copies, JavaScript strings, GC memory, swap, or crash/diagnostic dumps is not guaranteed. Keep secret-bearing diagnostics and debuggers disabled. The implementation does not perform EVM signing inside the Secure Enclave; your Node wallet library signs with the returned key.
-
-Keychain migration does not make an already leaked key safe. This tool does not move funds, revoke approvals, delete old secret files, or broadcast transactions. `ThisDeviceOnly` storage with synchronization disabled is not a cross-device recovery mechanism. Keep an independent offline backup.
-
-Real authentication results are specific to the tested Mac and signing configuration. Touch ID/password fallback, cancellation/incorrect passwords, reads after screen locking, and signing renewal still need separate validation as recorded in the [verification record (Chinese)](docs/verification.md). No real-funds transactions have been tested.
-
-## References
-
-- Apple: [Keychain implementations and provisioning](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains), [restricted-entitlement bundles](https://developer.apple.com/documentation/xcode/signing-a-daemon-with-a-restricted-entitlement), [Keychain access controls](https://developer.apple.com/documentation/security/restricting-keychain-item-accessibility), [authentication contexts](https://developer.apple.com/documentation/localauthentication/accessing-keychain-items-with-face-id-or-touch-id), [Mac distribution signing](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/).
-- Cryptography: [rust-bip39](https://github.com/rust-bitcoin/rust-bip39), [bip32 0.5.3](https://docs.rs/bip32/0.5.3/bip32/), [Keccak](https://docs.rs/sha3/0.10.8/sha3/), [ed25519-dalek-bip32 0.3.0](https://docs.rs/ed25519-dalek-bip32/0.3.0/ed25519_dalek_bip32/), [ed25519-dalek 2.2.0](https://docs.rs/ed25519-dalek/2.2.0/ed25519_dalek/), [SLIP-0010](https://github.com/satoshilabs/slips/blob/master/slip-0010.md), [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html).
-- UI: [egui/eframe](https://docs.rs/eframe/0.33.3/eframe/), [objc2 Apple framework bindings](https://github.com/madsmtm/objc2).
-- Integration: [napi-rs](https://napi.rs/docs/concepts/async-task), [viem](https://viem.sh/docs/accounts/local/privateKeyToAccount), [ethers v5](https://docs.ethers.org/v5/api/signer/#Wallet), [ethers v6](https://docs.ethers.org/v6/api/wallet/#Wallet), [Solana recovery-path example](https://solana.com/developers/cookbook/wallets/restore-from-mnemonic).
-- UI reference: MetaMask's [creation/import entry points](https://support.metamask.io/hc/en-us/articles/360015489531) and [recovery-phrase import flow](https://support.metamask.io/start/use-an-existing-wallet).
+[MIT](LICENSE)

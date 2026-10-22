@@ -33,14 +33,14 @@ if not any(allows(group, app_id) for group in entitlements.get("keychain-access-
 app = pathlib.Path(app_path)
 info = {
     "CFBundleIdentifier": bundle_id,
-    "CFBundleName": "Keychain Wallet",
-    "CFBundleDisplayName": "Keychain Wallet",
-    "CFBundleExecutable": "KeychainWallet",
+    "CFBundleName": "keychain-wallet",
+    "CFBundleDisplayName": "keychain-wallet",
+    "CFBundleExecutable": "keychain-wallet",
     "CFBundlePackageType": "APPL",
     "CFBundleVersion": "1",
     "CFBundleShortVersionString": "0.1.0",
     "LSMinimumSystemVersion": "14.0",
-    "LSUIElement": True,
+    "LSUIElement": False,
     "WalletAccessGroup": app_id,
 }
 signed_entitlements = {

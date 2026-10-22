@@ -1,0 +1,40 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    if: github.event.repository.private == false
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '26'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: node/package.json
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Install Node development dependencies
+        run: pnpm --dir node install --frozen-lockfile --ignore-scripts
+      - name: Rust and packaging tests
+        run: bash scripts/check-native.sh
+      - name: Build Node addon and declarations
+        run: pnpm --dir node run build
+      - name: Check TypeScript and Node integration
+        run: |
+          pnpm --dir node run check
+          pnpm --dir node test

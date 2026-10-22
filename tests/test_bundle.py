@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "scripts/prepare-bundle.py"
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "scripts/prepare-bundle.py"
 
 
 class BundleTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class BundleTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory(prefix="wallet-public-profile-test-")
         self.addCleanup(folder.cleanup)
         root = pathlib.Path(folder.name)
-        app = root / "KeychainWallet.app"
+        app = root / "keychain-wallet.app"
         (app / "Contents").mkdir(parents=True)
         profile = {
             "ApplicationIdentifierPrefix": ["PREFIX"], "TeamIdentifier": ["DIFFERENT_TEAM"],
@@ -41,7 +41,12 @@ class BundleTests(unittest.TestCase):
             "keychain-access-groups": ["PREFIX.com.example.Wallet"],
         })
         with (app / "Contents/Info.plist").open("rb") as source:
-            self.assertEqual(plistlib.load(source)["WalletAccessGroup"], "PREFIX.com.example.Wallet")
+            info = plistlib.load(source)
+        self.assertEqual(info["WalletAccessGroup"], "PREFIX.com.example.Wallet")
+        self.assertEqual(info["CFBundleName"], "keychain-wallet")
+        self.assertEqual(info["CFBundleDisplayName"], "keychain-wallet")
+        self.assertEqual(info["CFBundleExecutable"], "keychain-wallet")
+        self.assertFalse(info["LSUIElement"])
 
     def test_rejects_unauthorized_or_expired_profiles(self):
         for group, expired in [("PREFIX.other.*", False), ("PREFIX.com.example.*", True)]:

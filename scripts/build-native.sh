@@ -15,7 +15,8 @@ if [[ "$identity" == '-' || ! -f "$profile" ]]; then
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$root/build"
-app=$(mktemp -d "$root/build/KeychainWallet.XXXXXXXX")/KeychainWallet.app
+staging=$(mktemp -d "$root/build/.keychain-wallet.XXXXXXXX")
+app="$staging/keychain-wallet.app"
 mkdir -p "$app/Contents/MacOS"
 # The decoded profile contains signing metadata, never wallet secrets.
 /usr/bin/security cms -D -i "$profile" -o "${app%/*}/profile.plist"
@@ -25,10 +26,20 @@ cp "$profile" "$app/Contents/embedded.provisionprofile"
 export CARGO_TARGET_DIR="$root/target"
 export MACOSX_DEPLOYMENT_TARGET=14.0
 cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-app
-cp "$root/target/release/KeychainWallet" "$app/Contents/MacOS/KeychainWallet"
+cp "$root/target/release/keychain-wallet" "$app/Contents/MacOS/keychain-wallet"
 
 /usr/bin/codesign --force --sign "$identity" --options runtime --timestamp \
   --entitlements "${app%/*}/entitlements.plist" "$app"
 /usr/bin/codesign --verify --strict --verbose=2 "$app"
-echo "Built app: $app"
-echo 'Do not import a real wallet until the documented test-wallet checks pass.'
+output="$root/build/keychain-wallet.app"
+if [[ -e "$output" ]]; then
+  mv "$output" "$staging/previous.app"
+fi
+if ! mv "$app" "$output"; then
+  if [[ -e "$staging/previous.app" ]]; then
+    mv "$staging/previous.app" "$output"
+  fi
+  exit 1
+fi
+rm -rf "$staging"
+echo "Built app: $output"

@@ -1,62 +1,46 @@
 use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic};
-use ed25519_dalek_bip32::{DerivationPath as EdPath, ExtendedSigningKey};
+use derivation_path::DerivationPath as EdPath;
 use sha3::{Digest, Keccak256};
-use std::{slice, str};
-use zeroize::{Zeroize, Zeroizing};
-
-/// Safety: buffer must be writable for len bytes, or null with len zero.
-#[no_mangle]
-pub unsafe extern "C" fn mw_zeroize(buffer: *mut u8, len: usize) {
-    if !buffer.is_null() {
-        slice::from_raw_parts_mut(buffer, len).zeroize();
-    }
-}
-
-/// Safety: entropy must contain 16 bytes; output must be writable for 256 bytes.
-/// Buffers must not overlap. The UTF-8 output is zero-terminated, including on error.
-#[no_mangle]
-pub unsafe extern "C" fn mw_mnemonic_from_entropy(entropy: *const u8, output: *mut u8) -> i32 {
-    if output.is_null() {
-        return 4;
-    }
-    std::ptr::write_bytes(output, 0, 256);
-    if entropy.is_null() {
-        return 4;
-    }
-    let mnemonic =
-        match Mnemonic::from_entropy_in(Language::English, slice::from_raw_parts(entropy, 16)) {
-            Ok(value) => value,
-            Err(_) => return 1,
-        };
-    let words = Zeroizing::new(mnemonic.to_string());
-    if words.len() >= 256 {
-        return 4;
-    }
-    std::ptr::copy_nonoverlapping(words.as_ptr(), output, words.len());
-    0
-}
+use solana_ed25519::ed_sigs::ExtendedSigningKey;
+use zeroize::Zeroizing;
 
 fn derive_seed(seed: &[u8], curve: u32, path: &str) -> Result<(Zeroizing<[u8; 32]>, Vec<u8>), i32> {
     match curve {
         0 => {
             let path: DerivationPath = path.parse().map_err(|_| 2)?;
             let child = XPrv::derive_from_path(seed, &path).map_err(|_| 3)?;
-            Ok((Zeroizing::new(child.to_bytes()), child.private_key().verifying_key().to_encoded_point(false).as_bytes().to_vec()))
+            Ok((
+                Zeroizing::new(child.to_bytes()),
+                child
+                    .private_key()
+                    .verifying_key()
+                    .to_sec1_point(false)
+                    .as_bytes()
+                    .to_vec(),
+            ))
         }
         1 => {
             let path: EdPath = path.parse().map_err(|_| 2)?;
             // This backend implements SLIP-0010 and rejects non-hardened children.
-            let root = ExtendedSigningKey::from_seed(seed).map_err(|_| 3)?;
-            let child = root.derive(&path).map_err(|_| 3)?;
-            Ok((Zeroizing::new(child.signing_key.to_bytes()), child.verifying_key().to_bytes().to_vec()))
+            let child = ExtendedSigningKey::from_seed(seed)
+                .derive_path(path.into_iter().map(|index| index.to_bits()))
+                .map_err(|_| 3)?;
+            Ok((
+                Zeroizing::new(child.signing_key().to_secret_key_bytes()),
+                child.signing_key().verification_key().as_ref().to_vec(),
+            ))
         }
         _ => Err(4),
     }
 }
 
-pub fn derive(mnemonic: &str, passphrase: &str, curve: u32, path: &str)
-    -> Result<(Zeroizing<[u8; 32]>, Vec<u8>), i32> {
+pub fn derive(
+    mnemonic: &str,
+    passphrase: &str,
+    curve: u32,
+    path: &str,
+) -> Result<(Zeroizing<[u8; 32]>, Vec<u8>), i32> {
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic).map_err(|_| 1)?;
     let seed = Zeroizing::new(mnemonic.to_seed(passphrase));
     derive_seed(&seed[..], curve, path)
@@ -69,63 +53,10 @@ pub fn ethereum_address(public: &[u8]) -> [u8; 20] {
     address
 }
 
-/// Safety: public must contain 65 bytes, address_out must be writable for 20 bytes.
-#[no_mangle]
-pub unsafe extern "C" fn mw_ethereum_address(public: *const u8, address_out: *mut u8) -> i32 {
-    if address_out.is_null() { return 4; }
-    std::ptr::write_bytes(address_out, 0, 20);
-    if public.is_null() || *public != 4 { return 4; }
-    let address = ethereum_address(slice::from_raw_parts(public, 65));
-    std::ptr::copy_nonoverlapping(address.as_ptr(), address_out, 20);
-    0
-}
-
-/// Legacy C ABI; the desktop app calls the safe Rust API. No secret is logged across this ABI.
-/// Safety: inputs must be valid nonoverlapping buffers of the stated lengths;
-/// outputs must be writable buffers of 32 and 65 bytes respectively.
-/// Curve 0 = secp256k1, curve 1 = SLIP-0010 Ed25519 (public output uses its first 32 bytes).
-#[no_mangle]
-pub unsafe extern "C" fn mw_derive(
-    curve: u32,
-    mnemonic: *const u8,
-    mnemonic_len: usize,
-    passphrase: *const u8,
-    passphrase_len: usize,
-    path: *const u8,
-    path_len: usize,
-    key_out: *mut u8,
-    public_out: *mut u8,
-) -> i32 {
-    if key_out.is_null() || public_out.is_null() { return 4; }
-    std::ptr::write_bytes(key_out, 0, 32);
-    std::ptr::write_bytes(public_out, 0, 65);
-    if mnemonic.is_null()
-        || passphrase.is_null()
-        || path.is_null()
-        || key_out.is_null()
-        || public_out.is_null()
-        || mnemonic_len > 4096
-        || passphrase_len > 4096
-        || path_len > 128
-    {
-        return 4;
-    }
-    let inputs = (
-        str::from_utf8(slice::from_raw_parts(mnemonic, mnemonic_len)),
-        str::from_utf8(slice::from_raw_parts(passphrase, passphrase_len)),
-        str::from_utf8(slice::from_raw_parts(path, path_len)),
-    );
-    match inputs {
-        (Ok(m), Ok(p), Ok(d)) => match derive(m, p, curve, d) {
-            Ok((key, public)) => {
-                std::ptr::copy_nonoverlapping(key.as_ptr(), key_out, 32);
-                std::ptr::copy_nonoverlapping(public.as_ptr(), public_out, public.len());
-                0
-            }
-            Err(code) => code,
-        },
-        _ => 4,
-    }
+pub fn compressed_public_key(public: &[u8]) -> Result<Vec<u8>, i32> {
+    bip32::secp256k1::ecdsa::VerifyingKey::from_sec1_bytes(public)
+        .map(|key| key.to_sec1_point(true).as_bytes().to_vec())
+        .map_err(|_| 4)
 }
 
 #[cfg(test)]
@@ -135,7 +66,10 @@ mod tests {
     const PATH: &str = "m/44'/60'/0'/0/0";
 
     fn bytes(hex: &str) -> Vec<u8> {
-        (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
@@ -143,79 +77,83 @@ mod tests {
         // SLIP-0010 test vector 1: master and final hardened child.
         let seed = bytes("000102030405060708090a0b0c0d0e0f");
         for (path, secret, public) in [
-            ("m", "2b4be7f19ee27bbf30c667b642d5f4aa69fd169872f8fc3059c08ebae2eb19e7", "a4b2856bfec510abab89753fac1ac0e1112364e7d250545963f135f2a33188ed"),
-            ("m/0'/1'/2'/2'/1000000000'", "8f94d394a8e8fd6b1bc2f3f49f5c47e385281d5c17e65324b0f62483e37e8793", "3c24da049451555d51a7014a37337aa4e12d41e485abccfa46b47dfb2af54b7a"),
+            (
+                "m",
+                "2b4be7f19ee27bbf30c667b642d5f4aa69fd169872f8fc3059c08ebae2eb19e7",
+                "a4b2856bfec510abab89753fac1ac0e1112364e7d250545963f135f2a33188ed",
+            ),
+            (
+                "m/0'/1'/2'/2'/1000000000'",
+                "8f94d394a8e8fd6b1bc2f3f49f5c47e385281d5c17e65324b0f62483e37e8793",
+                "3c24da049451555d51a7014a37337aa4e12d41e485abccfa46b47dfb2af54b7a",
+            ),
         ] {
             let (key, result) = derive_seed(&seed, 1, path).unwrap();
             assert_eq!(key.as_slice(), bytes(secret));
             assert_eq!(result, bytes(public));
         }
         assert!(derive_seed(&seed, 1, "m/0'/1").is_err());
+        assert!(derive_seed(&seed, 1, "m/2147483648'").is_err());
+        assert!(derive_seed(&seed, 1, "bad/path").is_err());
         assert!(derive_seed(&seed, 2, "m/0'").is_err());
     }
 
     #[test]
-    fn ffi_keypair_lengths_and_error_clearing() {
-        let mut key = [0xa5; 32];
-        let mut public = [0xa5; 65];
-        let path = "m/44'/501'/0'/0'";
-        for (curve, path, expected) in [(1, path, 0), (1, "m/0'/1", 3), (5, path, 4)] {
-            let code = unsafe { mw_derive(curve, WORDS.as_ptr(), WORDS.len(), b"".as_ptr(), 0,
-                path.as_ptr(), path.len(), key.as_mut_ptr(), public.as_mut_ptr()) };
-            assert_eq!(code, expected);
-            if code == 0 {
-                assert!(public[..32].iter().any(|b| *b != 0));
-                assert_eq!(&public[32..], &[0; 33]);
-                let (reference_key, reference_public) = derive(WORDS, "", 1, path).unwrap();
-                assert_eq!(key, *reference_key);
-                assert_eq!(&public[..32], reference_public);
-            } else {
-                assert_eq!(key, [0; 32]);
-                assert_eq!(public, [0; 65]);
-            }
-        }
-        key.fill(0xa5);
-        public.fill(0xa5);
-        assert_eq!(unsafe { mw_derive(0, std::ptr::null(), 0, b"".as_ptr(), 0,
-            PATH.as_ptr(), PATH.len(), key.as_mut_ptr(), public.as_mut_ptr()) }, 4);
-        assert_eq!(key, [0; 32]);
-        assert_eq!(public, [0; 65]);
+    fn ed25519_extended_keys_clear_secret_and_chain_code() {
+        use zeroize::Zeroize;
+        assert!(std::mem::needs_drop::<ExtendedSigningKey>());
+        let mut key = ExtendedSigningKey::from_seed(&[1; 32]);
+        key.zeroize();
+        assert_eq!(key.signing_key().as_secret_key_bytes(), &[0; 32]);
+        assert_eq!(key.chain_code(), &[0; 32]);
     }
 
     #[test]
-    fn entropy_to_mnemonic_bip39_vector_and_error_clearing() {
+    fn solana_derivation_matches_previous_backend() {
+        // Captured from ed25519-dalek-bip32 using the public Hardhat mnemonic.
+        for (passphrase, path, secret, public) in [
+            (
+                "",
+                "m/44'/501'/0'/0'",
+                "a01c67efb5cb8f62f15907a9fcf124c73d2695c8a9a31f21c05742a31ca1dc72",
+                "0bf32b9f0db09672038fea36139b18f98a5f0149ef4ce0332e44b9a77e83c22d",
+            ),
+            (
+                "",
+                "m/44'/501'/1'/0'",
+                "3f25626cf245c8dd65a2b91a70e6f4c285182489fda230e2553c3752aa962b61",
+                "9245441f4a752ea6328c6d8d2d2afcb36d131db998a47ca04d6d5d8587d0b012",
+            ),
+            (
+                "",
+                "m/2147483647'",
+                "ec130d14b2b636887c6c9b91afc937d0e84fe4fde149e2e9766aa926f9830c63",
+                "1946234b8b7c825e1d9f38251af3cd6edd8dfd80f8b41bff84a48dbe28a1348e",
+            ),
+            (
+                "TREZOR",
+                "m/44'/501'/0'/0'",
+                "81323bfedeabf1da2af3fc3d5370be76862f3e4a0e674efb0e3ddc81c1b6ed5f",
+                "0bd89cf16f4f7a40a2839b8ca08832cebec6737bd30cae4af528e59e6c6b0f33",
+            ),
+        ] {
+            let (key, result) = derive(WORDS, passphrase, 1, path).unwrap();
+            assert_eq!(key.as_slice(), bytes(secret));
+            assert_eq!(result, bytes(public));
+        }
+    }
+
+    #[test]
+    fn entropy_to_mnemonic_bip39_vector() {
         let entropy = [0u8; 16];
-        let mut output = [0xa5u8; 256];
+        let words = mnemonic_from_entropy(&entropy).unwrap();
+        assert_eq!(words.as_str(), "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about");
         assert_eq!(
-            unsafe { mw_mnemonic_from_entropy(entropy.as_ptr(), output.as_mut_ptr()) },
-            0
-        );
-        let len = output.iter().position(|b| *b == 0).unwrap();
-        let words = str::from_utf8(&output[..len]).unwrap();
-        assert_eq!(words, "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about");
-        assert_eq!(
-            Mnemonic::parse_in(Language::English, words)
+            Mnemonic::parse_in(Language::English, words.as_str())
                 .unwrap()
                 .to_entropy(),
             entropy
         );
-        assert_eq!(
-            unsafe { mw_mnemonic_from_entropy(std::ptr::null(), output.as_mut_ptr()) },
-            4
-        );
-        assert_eq!(output, [0; 256]);
-    }
-
-    #[test]
-    fn ffi_wipe_clears_caller_buffer() {
-        let mut buffer = [0xa5; 64];
-        unsafe {
-            mw_zeroize(buffer.as_mut_ptr(), buffer.len());
-        }
-        assert_eq!(buffer, [0; 64]);
-        unsafe {
-            mw_zeroize(std::ptr::null_mut(), 0);
-        }
     }
 
     #[test]
@@ -229,6 +167,15 @@ mod tests {
                 0x79, 0xcf, 0xff, 0xb9, 0x22, 0x66
             ]
         );
+        let compressed = compressed_public_key(&public).unwrap();
+        assert_eq!(compressed.len(), 33);
+        assert!(matches!(compressed[0], 2 | 3));
+        let restored = bip32::secp256k1::ecdsa::VerifyingKey::from_sec1_bytes(&compressed)
+            .unwrap()
+            .to_sec1_point(false);
+        assert_eq!(restored.as_bytes(), public.as_slice());
+        assert_eq!(compressed_public_key(&compressed).unwrap(), compressed);
+        assert!(compressed_public_key(&[0; 33]).is_err());
     }
 
     #[test]
@@ -255,7 +202,9 @@ mod tests {
     }
 }
 
-/// Convert OS-supplied entropy to an English BIP-39 phrase without crossing an FFI boundary.
+/// Convert OS-supplied entropy to an English BIP-39 phrase.
 pub fn mnemonic_from_entropy(entropy: &[u8; 16]) -> Result<Zeroizing<String>, i32> {
-    Mnemonic::from_entropy_in(Language::English, entropy).map(|m| Zeroizing::new(m.to_string())).map_err(|_| 1)
+    Mnemonic::from_entropy_in(Language::English, entropy)
+        .map(|m| Zeroizing::new(m.to_string()))
+        .map_err(|_| 1)
 }

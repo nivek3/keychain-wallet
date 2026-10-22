@@ -4,8 +4,3 @@ resolver = "2"
 
 [profile.release]
 strip = "symbols"
-
-# Legacy C ABI builds keep abort-on-panic; the desktop app and Node addon use release.
-[profile.crypto-release]
-inherits = "release"
-panic = "abort"

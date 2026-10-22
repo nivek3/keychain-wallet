@@ -19,6 +19,7 @@ __pycache__/
 *.pfx
 *.developerprofile
 *.zip
+*.tgz
 *.mobileprovision
 *.xip
 *.xcarchive/
@@ -30,3 +31,8 @@ DerivedData/
 !/scripts/
 !/scripts/*.sh
 !/scripts/*.py
+
+# Public workflow definitions
+!/.github/
+!/.github/workflows/
+!/.github/workflows/*.yml
