@@ -20,6 +20,8 @@ const wallet = new Wallet(privateKey);
 console.log(wallet.address); // 不要输出私钥或整个 wallet 对象。
 ```
 
+https://github.com/user-attachments/assets/3554d122-92ed-412b-bce7-057f6dcdcdff
+
 **当前为源码预览版。** 可以按下文自行构建；当前仓库尚未提供经过公证的 App 下载或经过发布验证的 npm 版本。请先使用无资金的测试钱包，项目尚未接受独立安全审计。
 
 ## 能做什么

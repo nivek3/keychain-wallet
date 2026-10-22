@@ -20,6 +20,8 @@ const wallet = new Wallet(privateKey);
 console.log(wallet.address); // Never log the private key or wallet object.
 ```
 
+https://github.com/user-attachments/assets/3554d122-92ed-412b-bce7-057f6dcdcdff
+
 **Status: source preview.** Build instructions are available today. A notarized app download and a verified npm release are not provided by this checkout. Start with an unfunded test wallet; the project has not undergone an independent security audit.
 
 ## What it does
