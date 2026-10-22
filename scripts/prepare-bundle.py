@@ -5,9 +5,11 @@ import plistlib
 import re
 import sys
 
-profile_path, bundle_id, app_path = sys.argv[1:]
+profile_path, bundle_id, app_path, version = sys.argv[1:]
 if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", bundle_id):
     raise SystemExit("Invalid bundle id")
+if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+    raise SystemExit("App version must be a numeric major.minor.patch version")
 with open(profile_path, "rb") as source:
     profile = plistlib.load(source)
 expiration = profile.get("ExpirationDate")
@@ -37,8 +39,8 @@ info = {
     "CFBundleDisplayName": "keychain-wallet",
     "CFBundleExecutable": "keychain-wallet",
     "CFBundlePackageType": "APPL",
-    "CFBundleVersion": "1",
-    "CFBundleShortVersionString": "0.1.0",
+    "CFBundleVersion": version,
+    "CFBundleShortVersionString": version,
     "LSMinimumSystemVersion": "14.0",
     "LSUIElement": False,
     "WalletAccessGroup": app_id,

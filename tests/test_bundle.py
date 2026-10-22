@@ -11,7 +11,7 @@ SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "scripts/prepare-bundle.p
 
 
 class BundleTests(unittest.TestCase):
-    def prepare(self, authorized_group="PREFIX.com.example.Wallet", expired=False):
+    def prepare(self, authorized_group="PREFIX.com.example.Wallet", expired=False, version="0.1.0"):
         folder = tempfile.TemporaryDirectory(prefix="wallet-public-profile-test-")
         self.addCleanup(folder.cleanup)
         root = pathlib.Path(folder.name)
@@ -26,7 +26,7 @@ class BundleTests(unittest.TestCase):
         source = root / "public-profile.plist"
         with source.open("wb") as file:
             plistlib.dump(profile, file)
-        result = subprocess.run([sys.executable, str(SCRIPT), str(source), "com.example.Wallet", str(app)],
+        result = subprocess.run([sys.executable, str(SCRIPT), str(source), "com.example.Wallet", str(app), version],
                                 capture_output=True, check=False)
         return result, root, app
 
@@ -47,6 +47,21 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(info["CFBundleDisplayName"], "keychain-wallet")
         self.assertEqual(info["CFBundleExecutable"], "keychain-wallet")
         self.assertFalse(info["LSUIElement"])
+
+    def test_bundle_version_follows_package_version(self):
+        result, _, app = self.prepare(version="1.2.3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with (app / "Contents/Info.plist").open("rb") as source:
+            info = plistlib.load(source)
+        self.assertEqual(info["CFBundleVersion"], "1.2.3")
+        self.assertEqual(info["CFBundleShortVersionString"], "1.2.3")
+
+    def test_rejects_invalid_bundle_version(self):
+        for version in ["", "v1.2.3", "1.2.3-beta.1", "1.2", "01.2.3"]:
+            with self.subTest(version=version):
+                result, _, app = self.prepare(version=version)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((app / "Contents/Info.plist").exists())
 
     def test_rejects_unauthorized_or_expired_profiles(self):
         for group, expired in [("PREFIX.other.*", False), ("PREFIX.com.example.*", True)]:

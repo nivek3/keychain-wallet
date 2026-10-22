@@ -1,0 +1,163 @@
+name: Release macOS App
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag matching wallet-app version (e.g. v0.1.0)'
+        required: true
+        type: string
+      draft:
+        description: 'Create a draft Release for manual publication'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-app-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      APPLE_BUNDLE_ID: ${{ vars.APPLE_BUNDLE_ID }}
+      APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+
+    steps:
+      - name: Validate release tag
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::Expected an existing tag in vMAJOR.MINOR.PATCH format.'
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      # Configure these repository Secrets and Variables before the first release.
+      - name: Check release configuration
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_BUNDLE_ID APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD APPLE_PROVISIONING_PROFILE APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing release configuration: $name"
+              exit 1
+            fi
+          done
+          if [[ "$APPLE_SIGNING_IDENTITY" != 'Developer ID Application: '* ]]; then
+            echo '::error::Public distribution requires a Developer ID Application identity.'
+            exit 1
+          fi
+
+      - name: Install Rust targets
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Check package version against tag
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked |
+            /usr/bin/python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "wallet-app"))')
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo '::error::Release tag must match crates/app/Cargo.toml version.'
+            exit 1
+          fi
+
+      - name: Import signing certificate and profile
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+        run: |
+          umask 077
+          keychain="$RUNNER_TEMP/wallet-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 32)
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/wallet-signing.p12"
+          printf '%s' "$APPLE_PROVISIONING_PROFILE" | base64 --decode > "$RUNNER_TEMP/wallet.provisionprofile"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/wallet-signing.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          rm -f "$RUNNER_TEMP/wallet-signing.p12"
+
+      - name: Build and sign universal app
+        run: |
+          bash scripts/build-native.sh "$APPLE_SIGNING_IDENTITY" \
+            "$RUNNER_TEMP/wallet.provisionprofile" "$APPLE_BUNDLE_ID" --universal
+          build/keychain-wallet.app/Contents/MacOS/keychain-wallet check-signing
+
+      - name: Notarize and staple app
+        timeout-minutes: 30
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          app=build/keychain-wallet.app
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/wallet-notarization.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/wallet-notarization.zip" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 25m --output-format json | tee "$RUNNER_TEMP/wallet-notarization.json"
+          /usr/bin/python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); sys.exit(0 if r.get("status") == "Accepted" else "Notarization was not accepted")' \
+            "$RUNNER_TEMP/wallet-notarization.json"
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+      - name: Package notarized app
+        run: |
+          mkdir -p release-assets
+          ditto -c -k --sequesterRsrc --keepParent build/keychain-wallet.app \
+            "release-assets/keychain-wallet-${RELEASE_TAG}-macOS-universal.zip"
+          cd release-assets
+          shasum -a 256 ./*.zip > SHA256SUMS.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: keychain-wallet-${{ inputs.tag }}-macOS
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_DRAFT: ${{ inputs.draft }}
+        run: |
+          gh release create "$RELEASE_TAG" release-assets/* --verify-tag \
+            --title "keychain-wallet $RELEASE_TAG" --generate-notes --draft="$RELEASE_DRAFT"
+
+      - name: Clean up signing assets
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/wallet-signing.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/wallet-signing.keychain-db" || echo '::warning::Could not delete the temporary signing Keychain.'
+          fi
+          rm -f "$RUNNER_TEMP/wallet-signing.p12" "$RUNNER_TEMP/wallet.provisionprofile" \
+            "$RUNNER_TEMP/wallet-notarization.zip" "$RUNNER_TEMP/wallet-notarization.json"

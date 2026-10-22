@@ -1,0 +1,139 @@
+name: Release Node.js
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag matching node/package.json version (e.g. v0.1.0)'
+        required: true
+        type: string
+      draft:
+        description: 'Package only, do not publish to npm'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-node-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    name: Release npm package
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+
+    steps:
+      - name: Validate release tag
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::Expected an existing tag in vMAJOR.MINOR.PATCH format.'
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '26'
+          registry-url: https://registry.npmjs.org
+
+      - name: Check package version against tag
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('node/package.json', 'utf8'));
+          assert.equal(pkg.name, 'keychain-wallet');
+          assert.equal(process.env.RELEASE_TAG, `v${pkg.version}`, 'Tag must match node/package.json version');
+          JS
+
+      - name: Check npm publishing configuration
+        if: ${{ !inputs.draft }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo '::error::Missing repository Secret: NPM_TOKEN'
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: node/package.json
+
+      - name: Install Rust targets
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Install development dependencies
+        run: pnpm --dir node install --frozen-lockfile --ignore-scripts
+
+      - name: Pack universal npm package
+        working-directory: node
+        run: |
+          mkdir -p "$RUNNER_TEMP/npm-release"
+          npm pack --pack-destination "$RUNNER_TEMP/npm-release"
+
+      - name: Verify package contents
+        run: |
+          /usr/bin/python3 <<'PY'
+          import os
+          import pathlib
+          import tarfile
+
+          folder = pathlib.Path(os.environ['RUNNER_TEMP']) / 'npm-release'
+          archives = list(folder.glob('*.tgz'))
+          assert len(archives) == 1, 'Expected exactly one npm tarball'
+          expected = {
+              'package/package.json', 'package/README.md', 'package/README_ZH.md',
+              'package/LICENSE', 'package/dist/index.js', 'package/dist/index.d.ts',
+              'package/dist/keychain-wallet.node',
+          }
+          with tarfile.open(archives[0], 'r:gz') as archive:
+              members = archive.getmembers()
+              assert {m.name for m in members} == expected, 'Unexpected or missing package files'
+              assert len(members) == len(expected), 'Duplicate package files'
+              assert all(m.isfile() and m.size > 0 for m in members), 'Invalid package file'
+          PY
+
+      - name: Check installation outside the source checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/npm-smoke"
+          cd "$RUNNER_TEMP/npm-smoke"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP"/npm-release/*.tgz
+          lipo -verify_arch arm64 x86_64 node_modules/keychain-wallet/dist/keychain-wallet.node
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { getKeyPair } from 'keychain-wallet';
+          await assert.rejects(
+            getKeyPair({ name: '', curve: 'secp256k1', helperPath: '/definitely-missing-keychain-wallet-helper' }),
+            { message: 'Invalid wallet selection' },
+          );
+          JS
+
+      - name: Upload npm package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: keychain-wallet-${{ inputs.tag }}-npm
+          path: ${{ runner.temp }}/npm-release/*.tgz
+          if-no-files-found: error
+
+      - name: Publish verified tarball to npm
+        if: ${{ !inputs.draft }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "$RUNNER_TEMP"/npm-release/*.tgz --ignore-scripts --access public --tag latest --registry https://registry.npmjs.org

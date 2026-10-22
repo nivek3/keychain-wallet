@@ -2,8 +2,8 @@
 set -euo pipefail
 umask 077
 
-if [[ $# != 3 ]]; then
-  echo 'Usage: bash scripts/build-native.sh <signing identity> <profile path> <bundle id>' >&2
+if [[ $# != 3 && ( $# != 4 || "$4" != '--universal' ) ]]; then
+  echo 'Usage: bash scripts/build-native.sh <signing identity> <profile path> <bundle id> [--universal]' >&2
   exit 1
 fi
 identity=$1
@@ -14,19 +14,31 @@ if [[ "$identity" == '-' || ! -f "$profile" ]]; then
   exit 1
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
+version=$(cargo metadata --no-deps --format-version 1 --locked --manifest-path "$root/Cargo.toml" |
+  /usr/bin/python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "wallet-app"))')
 mkdir -p "$root/build"
 staging=$(mktemp -d "$root/build/.keychain-wallet.XXXXXXXX")
 app="$staging/keychain-wallet.app"
 mkdir -p "$app/Contents/MacOS"
 # The decoded profile contains signing metadata, never wallet secrets.
 /usr/bin/security cms -D -i "$profile" -o "${app%/*}/profile.plist"
-/usr/bin/python3 "$root/scripts/prepare-bundle.py" "${app%/*}/profile.plist" "$bundle_id" "$app"
+/usr/bin/python3 "$root/scripts/prepare-bundle.py" "${app%/*}/profile.plist" "$bundle_id" "$app" "$version"
 cp "$profile" "$app/Contents/embedded.provisionprofile"
 
 export CARGO_TARGET_DIR="$root/target"
 export MACOSX_DEPLOYMENT_TARGET=14.0
-cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-app
-cp "$root/target/release/keychain-wallet" "$app/Contents/MacOS/keychain-wallet"
+if [[ "${4:-}" == '--universal' ]]; then
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-app --target "$target"
+  done
+  lipo -create "$root/target/aarch64-apple-darwin/release/keychain-wallet" \
+    "$root/target/x86_64-apple-darwin/release/keychain-wallet" \
+    -output "$app/Contents/MacOS/keychain-wallet"
+  lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/keychain-wallet"
+else
+  cargo build --release --locked --manifest-path "$root/Cargo.toml" -p wallet-app
+  cp "$root/target/release/keychain-wallet" "$app/Contents/MacOS/keychain-wallet"
+fi
 
 /usr/bin/codesign --force --sign "$identity" --options runtime --timestamp \
   --entitlements "${app%/*}/entitlements.plist" "$app"

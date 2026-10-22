@@ -125,7 +125,7 @@ tests/           打包测试
 docs/            签名与验证说明
 ```
 
-本地检查见[测试说明](docs/testing.md)，npm 发布见 [Node 打包说明](node/README_ZH.md#开发与发布)。App 使用 Cargo 和脚本构建，Xcode 用于 Personal Team provisioning，不作为仓库构建系统。
+本地检查见[测试说明](docs/testing.md)，App 的签名配置与手动发布见 [macOS 发布 CI](docs/signing.md#manual-macos-release-ci)，npm 发布见 [Node 打包说明](node/README_ZH.md#开发与发布)。App 使用 Cargo 和脚本构建，Xcode 用于 Personal Team provisioning，不作为仓库构建系统。
 
 报告问题时请提供 macOS 版本、CPU 架构、Node/Bun 版本、App/SDK 版本及错误码。复现只使用公开测试数据；安全问题请使用 [GitHub 私密漏洞报告](https://github.com/nivek3/keychain-wallet/security/advisories/new)。
 

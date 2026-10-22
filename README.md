@@ -125,7 +125,7 @@ tests/           Packaging tests
 docs/            Signing and validation guides
 ```
 
-See [testing](docs/testing.md) for local checks and [Node packaging](node/README.md#development-and-publishing) for the npm release process. The app build uses Cargo and scripts; Xcode is needed for Personal Team provisioning, not as a project build system.
+See [testing](docs/testing.md) for local checks, [manual macOS release CI](docs/signing.md#manual-macos-release-ci) for signing configuration and App releases, and [Node packaging](node/README.md#development-and-publishing) for the npm release process. The app build uses Cargo and scripts; Xcode is needed for Personal Team provisioning, not as a project build system.
 
 Bug reports should include macOS version, CPU architecture, Node/Bun version, app/SDK version, and the error code. Use public test fixtures for reproductions. Please report security issues through [GitHub private vulnerability reporting](https://github.com/nivek3/keychain-wallet/security/advisories/new).
 

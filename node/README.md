@@ -83,6 +83,17 @@ npm pack
 
 Install the generated `keychain-wallet-0.1.0.tgz` in a separate project and verify loading and the public API. After confirming that your publishing account owns the package name, publish that same inspected file with `npm publish ./keychain-wallet-0.1.0.tgz`. Update the version in `package.json` before each release. Build the signed app separately from the repository root.
 
+### Manual GitHub Actions release
+
+Use [`.github/workflows/release-node.yml`](../.github/workflows/release-node.yml), **Actions → Release Node.js → Run workflow**:
+
+1. Commit the release changes and push an existing `vMAJOR.MINOR.PATCH` tag matching `node/package.json`. The workflow must be on the default branch to appear in Actions.
+2. Enter that tag. Leave `draft` enabled to build and download the `.tgz` without publishing. This mode does not need npm or Apple credentials and does not create a GitHub Release.
+3. For npm publication, add the repository Secret `NPM_TOKEN`: a granular access token with publish permission for `keychain-wallet` and bypass 2FA enabled for CI, as described in [npm's CI guidance](https://docs.npmjs.com/using-private-packages-in-a-ci-cd-workflow/). Confirm package-name ownership and that the package's publishing policy permits token-based publication.
+4. Run again with the same tag and `draft` disabled. This rebuilds and verifies the tarball, uploads it to workflow artifacts, then publishes that same verified file to npm with the `latest` dist-tag. Existing npm versions cannot be overwritten; increment the version and create a new Git tag for the next release.
+
+CI reuses `prepack` to build the Universal addon and TypeScript outputs, checks the exact package file list, installs the tarball outside the checkout, and checks addon loading and rejection of invalid input without accessing a wallet. It checks both Mach-O architectures, but executes the smoke check only on the runner's architecture; it does not replace Intel runtime or interactive app validation. No npm token is passed to build or package scripts. The App and npm package use separate workflows (`release-app.yml` and `release-node.yml`); each tag must match the corresponding package version.
+
 ## License
 
 [MIT](LICENSE)

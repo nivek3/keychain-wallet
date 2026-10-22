@@ -83,6 +83,17 @@ npm pack
 
 先把生成的 `keychain-wallet-0.1.0.tgz` 安装到一个独立项目，验证加载和接口；确认发布账号拥有包名后，使用 `npm publish ./keychain-wallet-0.1.0.tgz` 发布同一个已检查的文件。每次发布前更新 `package.json` 的版本号。签名 App 由仓库根目录单独构建。
 
+### GitHub Actions 手动发布
+
+使用 [`.github/workflows/release-node.yml`](../.github/workflows/release-node.yml)，入口为 **Actions → Release Node.js → Run workflow**：
+
+1. 提交发布改动并推送与 `node/package.json` 版本一致的 `vMAJOR.MINOR.PATCH` tag。工作流需先进入默认分支，才会出现在 Actions 中。
+2. 填入已有 tag。保留 `draft` 勾选时只构建并提供 `.tgz` 下载，不发布 npm，也不创建 GitHub Release；此模式不需要 npm 或 Apple 凭据。
+3. 准备正式发布时，配置仓库 Secret `NPM_TOKEN`：使用具有 `keychain-wallet` 发布权限、允许 CI bypass 2FA 的 granular access token，见 [npm 官方 CI 说明](https://docs.npmjs.com/using-private-packages-in-a-ci-cd-workflow/)。先确认账号拥有包名，且包的发布策略允许 token 发布。
+4. 再次填入相同 tag，取消 `draft` 后运行。流程会重新构建并验证 tarball，上传到工作流产物，再将本次验证的同一个文件发布到 npm，dist-tag 为 `latest`。已有 npm 版本不能覆盖；下次发布需升级版本并创建新 Git tag。
+
+CI 复用 `prepack` 构建 Universal 原生模块、JS 和类型声明，严格检查包内文件清单，在源码目录之外安装 tarball，并检查原生模块加载和非法输入拒绝，不访问钱包。两个 Mach-O 架构均有检查，但加载检查只在 runner 当前架构执行，不能代替 Intel 运行验证或 App 交互验证。构建和打包脚本不会获得 npm token。App 与 npm 包分别使用 `release-app.yml` 和 `release-node.yml`，各自手动触发并校验对应包的版本。
+
 ## 许可证
 
 [MIT](LICENSE)
