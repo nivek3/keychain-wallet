@@ -22,7 +22,7 @@ concurrency:
 jobs:
   release:
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: write
     defaults:
@@ -129,13 +129,57 @@ jobs:
           codesign --verify --strict --verbose=2 "$app"
           spctl --assess --type execute --verbose=2 "$app"
 
-      - name: Package notarized app
+      - name: Create and sign DMG
         run: |
           mkdir -p release-assets
-          ditto -c -k --sequesterRsrc --keepParent build/keychain-wallet.app \
-            "release-assets/keychain-wallet-${RELEASE_TAG}-macOS-universal.zip"
+          dmg="release-assets/keychain-wallet-${RELEASE_TAG}-macOS-universal.dmg"
+          staging=$(mktemp -d "$RUNNER_TEMP/wallet-dmg.XXXXXXXX")
+          trap 'rm -rf "$staging"' EXIT
+          ditto build/keychain-wallet.app "$staging/keychain-wallet.app"
+          # The local build uses umask 077; distributed apps must be readable by other users.
+          chmod -R a+rX "$staging"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname keychain-wallet -srcfolder "$staging" -fs HFS+ -format UDZO "$dmg"
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp --identifier "${APPLE_BUNDLE_ID}.dmg" "$dmg"
+          codesign --verify --strict --verbose=2 "$dmg"
+          hdiutil verify "$dmg"
+
+      - name: Notarize and staple DMG
+        timeout-minutes: 30
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          dmg="release-assets/keychain-wallet-${RELEASE_TAG}-macOS-universal.dmg"
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 25m --output-format json | tee "$RUNNER_TEMP/wallet-dmg-notarization.json"
+          /usr/bin/python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); sys.exit(0 if r.get("status") == "Accepted" else "DMG notarization was not accepted")' \
+            "$RUNNER_TEMP/wallet-dmg-notarization.json"
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          codesign --verify --strict --verbose=2 "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+
+      - name: Verify final DMG contents and generate checksum
+        run: |
+          dmg="release-assets/keychain-wallet-${RELEASE_TAG}-macOS-universal.dmg"
+          mount_point=$(mktemp -d "$RUNNER_TEMP/wallet-dmg-mount.XXXXXXXX")
+          trap 'hdiutil detach "$mount_point" >/dev/null 2>&1 || true; rmdir "$mount_point"' EXIT
+          hdiutil attach "$dmg" -readonly -noautoopen -mountpoint "$mount_point"
+          test -L "$mount_point/Applications"
+          test "$(readlink "$mount_point/Applications")" = /Applications
+          app="$mount_point/keychain-wallet.app"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/keychain-wallet"
+          codesign --verify --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          hdiutil detach "$mount_point"
+          rmdir "$mount_point"
+          trap - EXIT
           cd release-assets
-          shasum -a 256 ./*.zip > SHA256SUMS.txt
+          shasum -a 256 ./*.dmg > SHA256SUMS.txt
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -160,4 +204,5 @@ jobs:
             security delete-keychain "$RUNNER_TEMP/wallet-signing.keychain-db" || echo '::warning::Could not delete the temporary signing Keychain.'
           fi
           rm -f "$RUNNER_TEMP/wallet-signing.p12" "$RUNNER_TEMP/wallet.provisionprofile" \
-            "$RUNNER_TEMP/wallet-notarization.zip" "$RUNNER_TEMP/wallet-notarization.json"
+            "$RUNNER_TEMP/wallet-notarization.zip" "$RUNNER_TEMP/wallet-notarization.json" \
+            "$RUNNER_TEMP/wallet-dmg-notarization.json"
