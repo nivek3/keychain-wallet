@@ -18,6 +18,7 @@ pub enum Failure {
     Transport,
     Corrupt,
     Catalog,
+    Settings,
 }
 impl Failure {
     pub fn code(self) -> &'static str {
@@ -36,10 +37,12 @@ impl Failure {
             Self::Transport => "TRANSPORT_ERROR",
             Self::Corrupt => "INVALID_ITEM",
             Self::Catalog => "NAME_LIST_ERROR",
+            Self::Settings => "SETTINGS_ERROR",
         }
     }
     pub fn message(self) -> &'static str {
         match self {
+            Self::Settings => "Unable to read authentication settings. Open Settings and save an option.",
             Self::Mnemonic => "Check the English recovery words, their order, and checksum.",
             Self::Address => "The phrase, passphrase, and path do not match the expected Ethereum address.",
             Self::PublicKey => "The phrase, passphrase, and path do not match the expected Ed25519 public key.",
@@ -337,31 +340,34 @@ pub fn check_passphrase(passphrase: &str, confirmation: &str, empty: bool) -> Re
     }
 }
 
-// Creation cannot reach persistence until the complete backup has matched.
+// Creation requires a matching backup or an explicit choice to skip it.
 pub struct PendingWallet {
     wallet: StoredWallet,
-    confirmed: bool,
+    ready_to_save: bool,
 }
 impl PendingWallet {
     pub fn new(wallet: StoredWallet, creating: bool) -> Self {
         Self {
             wallet,
-            confirmed: !creating,
+            ready_to_save: !creating,
         }
     }
     pub fn phrase(&self) -> &str {
         &self.wallet.mnemonic
     }
     pub fn confirm(&mut self, phrase: &str) -> Result<()> {
-        self.confirmed = *normalize(phrase) == self.wallet.mnemonic;
-        if self.confirmed {
+        self.ready_to_save = *normalize(phrase) == self.wallet.mnemonic;
+        if self.ready_to_save {
             Ok(())
         } else {
             Err(Failure::Input)
         }
     }
+    pub fn skip_backup(&mut self) {
+        self.ready_to_save = true;
+    }
     pub fn for_save(&self) -> Result<&StoredWallet> {
-        if self.confirmed {
+        if self.ready_to_save {
             Ok(&self.wallet)
         } else {
             Err(Failure::Input)
@@ -577,6 +583,19 @@ mod tests {
         assert!(pending.for_save().is_err());
         assert!(pending.confirm(&format!("  {WORDS}\n")).is_ok());
         assert!(pending.for_save().is_ok());
+        assert!(pending.confirm("wrong backup").is_err());
+        assert!(pending.for_save().is_err());
+    }
+
+    #[test]
+    fn explicit_backup_skip_preserves_wallet_and_does_not_authorize_other_drafts() {
+        let mut pending = PendingWallet::new(wallet("test-passphrase"), true);
+        assert!(pending.for_save().is_err());
+        pending.skip_backup();
+        let saved = pending.for_save().unwrap();
+        assert_eq!(saved.mnemonic, WORDS);
+        assert_eq!(saved.passphrase, "test-passphrase");
+        assert!(PendingWallet::new(wallet(""), true).for_save().is_err());
         assert!(pending.confirm("wrong backup").is_err());
         assert!(pending.for_save().is_err());
     }

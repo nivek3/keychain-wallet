@@ -7,6 +7,8 @@ export type Curve = 'secp256k1' | 'ed25519';
 export type WalletSelection = {
   /** Optional absolute executable path; normally discovered by the native bridge. */
   helperPath?: string;
+  /** Optional non-negative safe integer seconds, capped by the app setting. Omit to follow the app; 0 authenticates every call. */
+  authenticationTtl?: number;
   name: string;
 } & (
   | ({ curve: 'secp256k1' } & (

@@ -13,7 +13,8 @@ use std::{
 fn emit(value: &serde_json::Value) -> Result<()> {
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer(&mut stdout, value).map_err(|_| Failure::Transport)?;
-    stdout.write_all(b"\n").map_err(|_| Failure::Transport)
+    stdout.write_all(b"\n").map_err(|_| Failure::Transport)?;
+    stdout.flush().map_err(|_| Failure::Transport)
 }
 fn pipe_descriptor(fd: i32) -> bool {
     unsafe {
@@ -24,18 +25,60 @@ fn pipe_descriptor(fd: i32) -> bool {
         matches!(stat.st_mode & libc::S_IFMT, libc::S_IFIFO | libc::S_IFSOCK)
     }
 }
-fn read_request(input: &mut impl Read) -> Result<KeyRequest> {
+fn read_request(input: &mut impl Read, session: &mut macos::AuthenticationSession, fd: Option<i32>) -> Result<Option<KeyRequest>> {
     let mut data = Vec::new();
-    input
-        .take(2049)
-        .read_to_end(&mut data)
-        .map_err(|_| Failure::Transport)?;
-    if data.len() > 2048 {
-        return Err(Failure::Input);
+    loop {
+        if let Some(fd) = fd {
+            loop {
+                let now = std::time::Instant::now();
+                session.expire(now);
+                let timeout = session.remaining(now)
+                    .map(|time| time.as_millis().min(i32::MAX as u128) as i32).unwrap_or(-1);
+                let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+                let ready = unsafe { libc::poll(&mut poll, 1, timeout) };
+                if ready > 0 { break; }
+                if ready < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                    return Err(Failure::Transport);
+                }
+            }
+        }
+        let mut byte = [0];
+        let count = input.read(&mut byte).map_err(|_| Failure::Transport)?;
+        if count == 0 {
+            return if data.is_empty() { Ok(None) } else { Err(Failure::Input) };
+        }
+        if byte[0] == b'\n' { break; }
+        data.push(byte[0]);
+        if data.len() > 2048 { return Err(Failure::Input); }
     }
     let request: KeyRequest = serde_json::from_slice(&data).map_err(|_| Failure::Input)?;
     request.validate()?;
-    Ok(request)
+    Ok(Some(request))
+}
+fn bridge(vault: &macos::Vault, requested_ttl: u64) -> Result<()> {
+    if !pipe_descriptor(0) || !pipe_descriptor(3) {
+        return Err(Failure::Transport);
+    }
+    macos::initialize_accessory()?;
+    let catalog = catalog::Catalog::for_group(&vault.group)?;
+    let mut session = macos::AuthenticationSession::default();
+    let mut input = unsafe { std::fs::File::from_raw_fd(0) };
+    let mut secret_pipe = unsafe { std::fs::File::from_raw_fd(3) };
+    while let Some(request) = read_request(&mut input, &mut session, Some(0))? {
+        objc2::rc::autoreleasepool(|_| -> Result<()> {
+            // Read the cap on every request, so saving zero takes effect immediately.
+            let ttl = requested_ttl.min(catalog.authentication_ttl()?);
+            let reason = format!("Wallet: {}\nCurve: {}\nPath: {}", request.name, request.curve.name(), request.path);
+            let context = session.context(&reason, std::time::Duration::from_secs(ttl), std::time::Instant::now());
+            let wallet = vault.read(&request.name, context);
+            session.complete(wallet.is_ok(), std::time::Instant::now());
+            let pair = model::derive(&wallet?, &request, None)?;
+            // Only the selected key crosses the inherited private pipe, never stdout.
+            secret_pipe.write_all(&*pair.key).map_err(|_| Failure::Transport)?;
+            emit(&serde_json::json!({"name":request.name,"path":request.path,"curve":request.curve.name(),"publicKey":pair.public_key}))
+        })?;
+    }
+    Ok(())
 }
 fn main_impl() -> Result<()> {
     unsafe {
@@ -58,31 +101,8 @@ fn main_impl() -> Result<()> {
     if args.is_empty() {
         return ui::run(vault, None, None);
     }
-    if args == ["--bridge"] {
-        if !pipe_descriptor(0) || !pipe_descriptor(3) {
-            return Err(Failure::Transport);
-        }
-        let request = read_request(&mut std::io::stdin().lock())?;
-        macos::initialize_accessory()?;
-        let context = macos::AuthContext::new(
-            &format!(
-                "Wallet: {}\nCurve: {}\nPath: {}",
-                request.name,
-                request.curve.name(),
-                request.path
-            ),
-            false,
-        );
-        let wallet = vault.read(&request.name, &context)?;
-        let pair = model::derive(&wallet, &request, None)?;
-        // The private key never goes to stdout, stderr, argv, or an environment variable.
-        let mut secret_pipe = unsafe { std::fs::File::from_raw_fd(3) };
-        secret_pipe
-            .write_all(&*pair.key)
-            .map_err(|_| Failure::Transport)?;
-        return emit(
-            &serde_json::json!({"name":request.name,"path":request.path,"curve":request.curve.name(),"publicKey":pair.public_key}),
-        );
+    if args.len() == 2 && args[0] == "--bridge" {
+        return bridge(&vault, args[1].parse().map_err(|_| Failure::Input)?);
     }
     if args == ["list"] {
         macos::initialize_accessory()?;
@@ -134,14 +154,36 @@ mod tests {
     use super::*;
     #[test]
     fn bridge_request_is_bounded_and_does_not_accept_secret_arguments() {
-        let request = br#"{"name":"public-test","curve":"ed25519","path":"m/0'"}"#;
-        assert!(read_request(&mut request.as_slice()).is_ok());
-        assert!(read_request(&mut vec![b' '; 2049].as_slice()).is_err());
-        assert!(read_request(&mut br#"{"name":"public-test","path":"m/0'"}"#.as_slice()).is_err());
-        assert!(read_request(
-            &mut br#"{"name":"public-test","curve":"ed25519","path":"m/0'/1"}"#.as_slice()
-        )
-        .is_err());
+        let mut session = macos::AuthenticationSession::default();
+        let request = b"{\"name\":\"public-test\",\"curve\":\"ed25519\",\"path\":\"m/0'\"}\n";
+        let mut input = request.as_slice();
+        assert!(read_request(&mut input, &mut session, None).unwrap().is_some());
+        assert!(read_request(&mut input, &mut session, None).unwrap().is_none());
+        assert!(read_request(&mut request[..request.len()-1].as_ref(), &mut session, None).is_err());
+        assert!(read_request(&mut vec![b' '; 2049].as_slice(), &mut session, None).is_err());
+        for invalid in [b"{}\n".as_slice(), b"{\"name\":\"test\",\"curve\":\"ed25519\",\"path\":\"m/0'/1\"}\n"] {
+            assert!(read_request(&mut invalid.as_ref(), &mut session, None).is_err());
+        }
+    }
+    #[test]
+    fn idle_bridge_expires_authentication_and_reads_multiple_frames() {
+        use std::{os::fd::AsRawFd, time::{Duration, Instant}};
+        let (mut input, mut writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let fd = input.as_raw_fd();
+        let mut session = macos::AuthenticationSession::default();
+        session.context("Public pipe fixture", Duration::from_millis(20), Instant::now());
+        session.complete(true, Instant::now());
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            for _ in 0..2 {
+                writeln!(writer, "{{\"name\":\"test\",\"curve\":\"ed25519\",\"path\":\"m/0'\"}}").unwrap();
+            }
+        });
+        assert!(read_request(&mut input, &mut session, Some(fd)).unwrap().is_some());
+        assert!(session.remaining(Instant::now()).is_none());
+        assert!(read_request(&mut input, &mut session, Some(fd)).unwrap().is_some());
+        assert!(read_request(&mut input, &mut session, Some(fd)).unwrap().is_none());
+        sender.join().unwrap();
     }
     #[test]
     fn secret_transport_rejects_regular_files() {

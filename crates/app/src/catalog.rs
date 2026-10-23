@@ -91,6 +91,10 @@ impl Catalog {
         if bytes.len() > 1_048_576 {
             return Err(Failure::Catalog);
         }
+        self.write_bytes(&bytes)?;
+        Ok(names)
+    }
+    fn write_bytes(&self, bytes: &[u8]) -> Result<()> {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| Failure::Catalog)?
@@ -112,8 +116,24 @@ impl Catalog {
         if result.is_err() {
             let _ = fs::remove_file(&temp);
         }
-        result?;
-        Ok(names)
+        result
+    }
+    pub fn authentication_ttl(&self) -> Result<u64> {
+        let path = self.path.with_file_name("settings.json");
+        let file = match OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(300),
+            Err(_) => return Err(Failure::Settings),
+        };
+        let mut bytes = Vec::new();
+        file.take(65).read_to_end(&mut bytes).map_err(|_| Failure::Settings)?;
+        if bytes.len() > 64 { return Err(Failure::Settings); }
+        serde_json::from_slice::<u64>(&bytes).map_err(|_| Failure::Settings)
+    }
+    pub fn set_authentication_ttl(&self, seconds: u64) -> Result<()> {
+        let _lock = self.lock()?;
+        Self { path: self.path.with_file_name("settings.json") }
+            .write_bytes(seconds.to_string().as_bytes()).map_err(|_| Failure::Settings)
     }
     pub fn upsert(&self, entry: WalletSummary) -> Result<()> {
         entry.validate()?;
@@ -145,6 +165,27 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+    #[test]
+    fn authentication_settings_default_persist_and_reject_invalid_files() {
+        let catalog = fixture();
+        assert_eq!(catalog.authentication_ttl().unwrap(), 300);
+        catalog.set_authentication_ttl(0).unwrap();
+        assert_eq!(catalog.authentication_ttl().unwrap(), 0);
+        for seconds in [60, 300, 3600, 86400, u64::MAX] {
+            catalog.set_authentication_ttl(seconds).unwrap();
+            assert_eq!(catalog.authentication_ttl().unwrap(), seconds);
+        }
+        let path = catalog.path.with_file_name("settings.json");
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        for value in ["-1".to_owned(), "1.5".to_owned(), "18446744073709551616".to_owned(), "null".to_owned(), "300".to_owned() + &" ".repeat(100)] {
+            fs::write(&path, value).unwrap();
+            assert!(catalog.authentication_ttl().is_err());
+        }
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("missing-target", &path).unwrap();
+        assert!(catalog.authentication_ttl().is_err());
+        fs::remove_dir_all(catalog.path.parent().unwrap()).unwrap();
+    }
     fn names(entries: Vec<WalletSummary>) -> Vec<String> {
         entries.into_iter().map(|e| e.name).collect()
     }

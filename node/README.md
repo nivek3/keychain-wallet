@@ -28,7 +28,21 @@ Both result fields are `0x` hex strings. secp256k1 returns a 32-byte private sca
 
 The bridge finds `keychain-wallet.app` in `~/Applications` or `/Applications`. In the source checkout, it can also find `build/keychain-wallet.app`. Otherwise pass an absolute executable path as `helperPath`. The app bundle is not included in this npm package; the app and addon must be upgraded together. Use ESM, or `await import('keychain-wallet')` from CommonJS.
 
-Results and failures are cached in the current Node process. Calls must originate from the main thread; different processes authenticate separately. Deleting a wallet or locking the screen does not revoke keys already returned to a process.
+Calls reuse a macOS authentication context in a private helper belonging to the current Node process. The fixed window starts after successful authentication and defaults to 300 seconds; repeated calls do not extend it. Keys and failures are not cached. Each call reads Keychain again. Calls must originate from the main thread; different Node processes and App UI operations authenticate separately.
+
+In **… → Settings → Node authentication**, enter a non-negative whole number of minutes and save. The default is 5; `0` authenticates every time. There is no policy maximum; values must fit in unsigned 64-bit seconds. Changes apply to the next Node request, including existing sessions. App recovery-phrase reveals and deletions always require fresh authentication.
+
+`authenticationTtl` optionally requests a shorter window in seconds (a non-negative JavaScript safe integer). Omit it to follow the app setting. `0` requires authentication on every call. The app setting is an upper bound: a caller cannot override it. Changing this parameter starts a fresh helper session.
+
+```ts
+const keys = await getKeyPair({
+  name: 'trading',
+  curve: 'secp256k1',
+  authenticationTtl: 0,
+});
+```
+
+Helper state disappears when the Node process exits. Failures terminate the helper; a subsequent explicit call can retry. Deleting a wallet or locking the screen does not revoke keys already returned to your code.
 
 ## Run the examples
 
@@ -53,10 +67,11 @@ Node.js 22+ is the supported target. Bun's Node-API support may run these exampl
 | `KEYCHAIN_WALLET_APP_NOT_FOUND` | Install the complete app or set `helperPath`; npm does not include the app |
 | `KEYCHAIN_WALLET_BRIDGE_NOT_BUILT` | Check addon build and CPU architecture; `cause` contains the original load error |
 | `SIGNING_CONFIGURATION` | Check certificate, profile, bundle ID, and private access group using the signing guide |
+| `SETTINGS_ERROR` | Open the app Settings and save an authentication option again |
 | `Invalid wallet selection` | curve is required; path and index are exclusive; Ed25519 requires a hardened-only path |
-| `CANCELLED` / `AUTHENTICATION_FAILED` | Complete local authentication and retry in a new process |
+| `CANCELLED` / `AUTHENTICATION_FAILED` | Complete local authentication; an explicit subsequent call can retry |
 
-Failures are cached in the current process. Restart after fixing the cause. Never attach private keys, recovery phrases, or passphrases to an error report.
+There is no automatic retry after a failed request. Fix the cause before calling again. Never attach private keys, recovery phrases, or passphrases to an error report.
 
 ## Development and publishing
 

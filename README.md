@@ -70,7 +70,7 @@ You need macOS 14+, Rust, Apple command-line development tools, Python 3, Node.j
    open build/keychain-wallet.app
    ```
 
-3. Click **+** and create or import a wallet named `trading`. For a new wallet, back up and confirm all recovery words. For import, supply an independently known Ethereum address or Ed25519 public key to verify the restored account. Example names are not created automatically.
+3. Click **+** and create or import a wallet named `trading`. For a new wallet, confirm all recovery words, or choose **Skip** to save without verifying the backup. You can view the phrase later through **Seed phrase**, after macOS authentication. For import, supply an independently known Ethereum address or Ed25519 public key to verify the restored account. Example names are not created automatically.
 
 4. Build the SDK and run an example:
 
@@ -109,7 +109,7 @@ secp256k1 returns a 32-byte private scalar and a 33-byte compressed public key. 
 
 - Keychain uses `WhenUnlockedThisDeviceOnly`, user-presence access control, and a private access group. The display cache holds only names and public addresses.
 - Recovery phrases are masked by default. Reveals expire after 60 seconds and clear on focus loss, navigation, or Hide. Explicit copies are cleared after 60 seconds while the app runs, before blocking authentication, or on normal exit, provided the clipboard still contains the app's latest copy. Copies retained by other software cannot be revoked.
-- The Node process caches successful and failed unlocks for each selection. Restart it after fixing a failed lookup or cancelling authentication. Deleting a wallet or locking the Mac does not revoke keys already returned to a process.
+- Node calls reuse a process-local macOS authentication context without caching keys or failures. In **… → Settings → Node authentication**, enter a custom duration in whole minutes (default: 5), then save. There is no policy maximum; `0` requires authentication on every call. App recovery-phrase reveals and deletions always authenticate separately. Deleting a wallet or locking the Mac cannot revoke keys already returned to your code.
 - The SDK requires a logged-in macOS session for interactive authentication. It does not target browsers, Linux/Windows servers, or unattended jobs.
 - Keep an independent offline recovery backup. A BIP-39 passphrase changes the wallet; it is not the Mac login password. Never share secrets in issues or logs.
 

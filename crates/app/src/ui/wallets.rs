@@ -1,5 +1,6 @@
 use super::{revealed_card, Stage, WalletApp};
 use crate::{
+    catalog::Catalog,
     model::{WalletSummary, DEFAULT_ETH_PATH, DEFAULT_SOL_PATH},
     theme,
 };
@@ -51,7 +52,7 @@ impl WalletApp {
                     clicked = Some(entry.name.clone());
                 }
             });
-            ui.add_space(3.0);
+            ui.add_space(2.0);
         }
         if let Some(name) = clicked {
             self.revealed.clear();
@@ -90,26 +91,23 @@ impl WalletApp {
         if self.name != entry.name {
             self.revealed.clear();
         }
-        ui.add_space(36.0);
-        let width = ui.available_width().min(500.0);
+        let width = ui.available_width().min(380.0);
         ui.vertical_centered(|ui| {
             ui.set_width(width);
+            theme::wallet_heading(ui, &entry.name);
+            ui.add_space(16.0);
             Frame::new()
                 .fill(theme::CANVAS)
-                .corner_radius(14)
-                .inner_margin(24)
+                .corner_radius(9)
+                .inner_margin(Margin::symmetric(14, 6))
                 .show(ui, |ui| {
-                    ui.set_width((width - 48.0).max(100.0));
-                    ui.add_space(4.0);
-                    theme::avatar(ui, &entry.name, 64.0);
-                    ui.add_space(12.0);
-                    ui.add(egui::Label::new(RichText::new(&entry.name).size(24.0).strong()).wrap());
-                    ui.add_space(24.0);
+                    ui.set_width((width - 28.0).max(100.0));
                     ui.with_layout(Layout::top_down(Align::Min), |ui| {
                         theme::account_row(ui, "Ethereum", entry.ethereum_address.as_deref());
                         ui.separator();
                         theme::account_row(ui, "Solana", entry.solana_address.as_deref());
-                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(4.0);
                         ui.collapsing("Derivation paths", |ui| {
                             theme::label(ui, "Ethereum");
                             ui.label(
@@ -126,19 +124,18 @@ impl WalletApp {
                             );
                         });
                     });
-                    ui.add_space(4.0);
                 });
-            ui.add_space(16.0);
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if theme::secondary(ui, "Recovery phrase…").clicked() {
+                if theme::secondary(ui, "Seed phrase").clicked() {
                     self.wipe_draft();
                     self.name = entry.name.clone();
-                    self.recovery_card_height = 196.0;
+                    self.recovery_card_height = 168.0;
                     self.message.clear();
                     self.stage = Stage::ViewPhrase;
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if theme::delete_button(ui, "Delete wallet…").clicked() {
+                    if theme::secondary(ui, "Delete").clicked() {
                         self.confirm_delete(vec![entry.name.clone()]);
                     }
                 });
@@ -153,20 +150,32 @@ impl WalletApp {
             self.recovery_card_height = card.rect.height();
         } else if theme::recovery_mask(ui, self.recovery_card_height).clicked() && focused {
             if let Err(error) = self.reveal_wallet(name) {
-                self.message = format!("Recovery phrase not shown ({}).", error.code());
+                self.message = format!("Seed phrase not shown ({}).", error.code());
             }
         }
     }
 
-    fn wallet_sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.set_height(32.0);
-            ui.label(RichText::new("Wallets").size(19.0).strong());
+    pub(super) fn wallet_controls(&mut self, ui: &mut egui::Ui) {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.scope(|ui| {
                     ui.spacing_mut().interact_size = egui::vec2(24.0, 24.0);
                     ui.spacing_mut().button_padding = egui::vec2(4.0, 3.0);
                     ui.menu_button("•••", |ui| {
+                        if ui.button("Settings…").clicked() {
+                            self.wipe_draft();
+                            self.message.clear();
+                            self.authentication_minutes = match Catalog::for_group(&self.vault.group)
+                                .and_then(|catalog| catalog.authentication_ttl()) {
+                                    Ok(seconds) => (seconds / 60).to_string(),
+                                    Err(_) => {
+                                        self.message = "Unable to read settings. Enter a duration to save.".into();
+                                        String::new()
+                                    }
+                                };
+                            self.stage = Stage::Settings;
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui.button("Refresh").clicked() {
                             self.show_wallets();
                             ui.close();
@@ -202,14 +211,16 @@ impl WalletApp {
                     self.stage = Stage::Welcome;
                 }
             });
-        });
-        ui.add_space(12.0);
+    }
+
+    fn wallet_sidebar(&mut self, ui: &mut egui::Ui) {
         let search = theme::input_frame()
             .fill(theme::SEARCH)
             .stroke(egui::Stroke::NONE)
-            .corner_radius(8)
-            .inner_margin(Margin::symmetric(10, 7))
+            .corner_radius(6)
+            .inner_margin(Margin::symmetric(8, 5))
             .show(ui, |ui| {
+                ui.spacing_mut().interact_size.y = 18.0;
                 ui.horizontal(|ui| {
                     theme::search_icon(ui);
                     ui.add(
@@ -229,7 +240,7 @@ impl WalletApp {
             self.revealed.clear();
             self.show_wallet_details = false;
         }
-        ui.add_space(18.0);
+        ui.add_space(8.0);
         if !self.message.is_empty() {
             ui.colored_label(theme::DANGER, &self.message);
             ui.add_space(8.0);
@@ -241,21 +252,23 @@ impl WalletApp {
     }
 
     pub(super) fn wallet_browser(&mut self, ui: &mut egui::Ui) {
-        if ui.available_width() >= 720.0 {
-            egui::SidePanel::left("wallet-sidebar")
-                .exact_width(272.0)
+        if ui.available_width() >= 632.0 || !self.sidebar_visible {
+            if self.sidebar_visible {
+                egui::SidePanel::left("wallet-sidebar")
+                .exact_width(196.0)
                 .resizable(false)
                 .frame(
                     Frame::new()
                         .fill(theme::CANVAS)
-                        .inner_margin(Margin::symmetric(16, 20)),
+                        .inner_margin(Margin::symmetric(12, 12)),
                 )
-                .show_inside(ui, |ui| self.wallet_sidebar(ui));
+                    .show_inside(ui, |ui| self.wallet_sidebar(ui));
+            }
             egui::CentralPanel::default()
                 .frame(
                     Frame::new()
                         .fill(Color32::WHITE)
-                        .inner_margin(Margin::symmetric(32, 20)),
+                        .inner_margin(Margin::symmetric(24, 24)),
                 )
                 .show_inside(ui, |ui| {
                     egui::ScrollArea::vertical()
@@ -274,10 +287,6 @@ impl WalletApp {
                 .show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
                     if self.show_wallet_details {
-                        if theme::secondary(ui, "Back").clicked() {
-                            self.revealed.clear();
-                            self.show_wallet_details = false;
-                        }
                         egui::ScrollArea::vertical()
                             .id_salt("wallet-detail-narrow")
                             .show(ui, |ui| self.wallet_detail(ui));

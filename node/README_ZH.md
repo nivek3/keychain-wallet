@@ -28,7 +28,21 @@ const { publicKey, privateKey } = await getKeyPair({
 
 桥接优先查找 `~/Applications` 和 `/Applications` 中的 `keychain-wallet.app`。源码仓库内还可找到 `build/keychain-wallet.app`；其他位置通过 `helperPath` 指定包内可执行文件的绝对路径。npm 包不包含应用，升级时应用与原生模块应一起构建。包为 ESM，CommonJS 可用 `await import('keychain-wallet')`。
 
-成功或失败结果保留在当前 Node 进程缓存中。只能从主线程调用，不同进程分别认证；删除钱包或锁屏不会撤回已返回的密钥。
+每个 Node 进程通过独立私有管道复用自己的 macOS 认证上下文。默认有效期为 300 秒，从认证成功开始固定计时，连续调用不会续期。不缓存密钥或失败结果，每次调用仍重新读取 Keychain。只能从主线程调用，不同 Node 进程与 App 界面操作分别认证。
+
+在 App 的 **… → Settings → Node authentication** 中输入非负整数分钟并保存，默认 5 分钟，`0` 表示每次认证。不设业务上限，数值需能转换为无符号 64 位整数秒。设置从下一次 Node 调用生效，包括已有会话。App 内显示助记词和删除钱包始终重新认证。
+
+可选参数 `authenticationTtl` 指定更短的有效期，单位秒，接受非负 JavaScript 安全整数；不传则跟随 App 设置，`0` 表示每次认证。App 设置为上限，调用方不能覆盖。修改参数会启动新的辅助进程会话。
+
+```ts
+const keys = await getKeyPair({
+  name: 'trading',
+  curve: 'secp256k1',
+  authenticationTtl: 0,
+});
+```
+
+Node 进程退出后会话失效。失败会终止辅助进程，后续显式调用可以重试。删除钱包或锁屏不会撤回已经返回给调用方的密钥。
 
 ## 运行示例
 
@@ -53,10 +67,11 @@ node --import tsx examples/ed25519.ts trading "m/44'/501'/2'/0'"
 | `KEYCHAIN_WALLET_APP_NOT_FOUND` | 安装完整 App，或指定 `helperPath`；npm 包不包含 App |
 | `KEYCHAIN_WALLET_BRIDGE_NOT_BUILT` | 检查原生模块是否构建、架构是否正确，原始加载错误位于 `cause` |
 | `SIGNING_CONFIGURATION` | 按签名说明检查证书、profile、bundle ID 和私有访问组 |
+| `SETTINGS_ERROR` | 打开 App 的 Settings，重新保存认证选项 |
 | `Invalid wallet selection` | curve 必填；path 与 index 互斥；Ed25519 必须指定 hardened-only path |
-| `CANCELLED` / `AUTHENTICATION_FAILED` | 在本机完成认证；重启进程后重试 |
+| `CANCELLED` / `AUTHENTICATION_FAILED` | 在本机完成认证；后续显式调用可重试 |
 
-失败结果会缓存在当前进程中，修复问题后需要重新运行。不要将私钥、助记词或附加口令附到报错中。
+请求失败后不会自动重试，修复原因后再调用。不要将私钥、助记词或附加口令附到报错中。
 
 ## 开发与发布
 

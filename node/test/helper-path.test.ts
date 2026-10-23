@@ -6,6 +6,7 @@ import { getKeyPair } from '../src/index.js';
 test('Rust bridge rejects invalid public selection before helper discovery', { skip: process.platform !== 'darwin' }, async () => {
   const base = { name: 'test', curve: 'secp256k1', helperPath: '/definitely-missing-keychain-wallet-helper' };
   for (const change of [
+    ...[-1, Number.MAX_SAFE_INTEGER + 1, 0.5, NaN, Infinity, '300', null].map(authenticationTtl => ({ authenticationTtl })),
     { curve: undefined }, { curve: 'p256' }, { curve: null },
     { name: 'bad\n' }, { name: '' }, { helperPath: 'relative' },
     { index: -1 }, { index: 0.5 }, { index: NaN }, { index: Infinity },

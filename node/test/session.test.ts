@@ -25,9 +25,16 @@ writeFileSync(
   `#!${process.execPath}
 import { appendFileSync, writeSync } from 'node:fs';
 import { createECDH, createPrivateKey, createPublicKey } from 'node:crypto';
-let input = '';
-for await (const chunk of process.stdin) input += chunk;
+import { createInterface } from 'node:readline';
+appendFileSync(process.argv[1] + '.starts', process.pid + '\\n');
+const ttl = Number(process.argv[3]) * 1000;
+let deadline = 0;
+for await (const input of createInterface({ input: process.stdin })) {
 const request = JSON.parse(input);
+if (!deadline || Date.now() >= deadline) {
+  appendFileSync(process.argv[1] + '.auth', request.name + '\\n');
+  deadline = Date.now() + ttl;
+}
 if (Object.keys(request).sort().join(',') !== 'curve,name,path' || typeof request.path !== 'string') {
   process.stderr.write('INVALID_INPUT\\n'); process.exit(1);
 }
@@ -57,7 +64,9 @@ if (request.name.startsWith('invalid-key')) key.fill(255);
 writeSync(3, request.name.startsWith('short') ? key.subarray(1) : request.name.startsWith('overflow-key') ? Buffer.alloc(33) : key);
 process.stdout.write(JSON.stringify({name:request.name,path:request.path,
   curve:request.name.startsWith('cross-curve') ? (ed ? 'secp256k1' : 'ed25519') : request.curve,
-  publicKey:request.name.startsWith('wrong') ? 'invalid' : request.name.startsWith('mismatch') ? '0x' + '00'.repeat(ed ? 32 : 33) : '0x' + publicKey.toString('hex')}));
+  publicKey:request.name.startsWith('wrong') ? 'invalid' : request.name.startsWith('mismatch') ? '0x' + '00'.repeat(ed ? 32 : 33) : '0x' + publicKey.toString('hex')}) + '\\n');
+if (request.name.startsWith('short')) process.exit(0);
+}
 `
 );
 chmodSync(helper, 0o700);
@@ -68,11 +77,11 @@ const calls = (name: string) =>
     .filter((v) => v === name).length;
 const macOnly = { skip: process.platform !== 'darwin' };
 
-test('key pairs share one unlock; consumers use their own viem / ethers objects', macOnly, async () => {
+test('key reads share one helper; consumers use their own viem / ethers objects', macOnly, async () => {
   const explicit = options('concurrent');
   const { path: _path, ...defaultPath } = explicit;
   const [one, two, three] = await Promise.all([getKeyPair(explicit), getKeyPair(defaultPath), getKeyPair({ ...defaultPath, index: 0 })]);
-  assert.equal(calls('concurrent'), 1);
+  assert.equal(calls('concurrent'), 3);
   assert.deepEqual(Object.keys(one).sort(), ['privateKey', 'publicKey']);
   assert.match(one.privateKey, /^0x[0-9a-f]{64}$/);
   assert.match(one.publicKey, /^0x0[23][0-9a-f]{64}$/);
@@ -102,10 +111,10 @@ test('index selects a different key pair from the same wallet', macOnly, async (
   assert.equal(new Wallet6(third.privateKey).address.toLowerCase(), thirdAddress);
   assert.deepEqual(third, explicit);
   assert.notEqual(third.publicKey, second.publicKey);
-  assert.equal(calls('index-pairs'), 3);
+  assert.equal(calls('index-pairs'), 4);
 });
 
-test('failure is sticky; no silent retry or environment fallback', macOnly, async () => {
+test('failures end the session; only explicit subsequent calls retry', macOnly, async () => {
   for (const [name, code] of [
     ['cancel-once', 'CANCELLED'],
     ['missing-once', 'NOT_FOUND'],
@@ -123,7 +132,7 @@ test('failure is sticky; no silent retry or environment fallback', macOnly, asyn
   ]) {
     await assert.rejects(getKeyPair(options(name)), { message: code });
     await assert.rejects(getKeyPair(options(name)), { message: code });
-    assert.equal(calls(name), 1);
+    assert.equal(calls(name), 2);
   }
 });
 
@@ -161,15 +170,15 @@ test('Ed25519 returns a 32-byte seed and public key usable for offline signature
   assert.equal(verify(null, Buffer.alloc(0), createPublicKey(privateKey), signature), true);
 });
 
-test('curves and explicit Ed25519 paths have separate sessions', macOnly, async () => {
+test('curves and explicit Ed25519 paths return independently verified keys', macOnly, async () => {
   const name = 'both-curves';
   const [secp, ed, duplicate] = await Promise.all([getKeyPair(options(name)), getKeyPair(edOptions(name)), getKeyPair(edOptions(name))]);
   assert.notEqual(secp.publicKey, ed.publicKey);
   assert.deepEqual(ed, duplicate);
-  assert.equal(calls(name), 2);
+  assert.equal(calls(name), 3);
   const second = await getKeyPair({ ...edOptions(name), path: "m/44'/501'/0'/1'" });
   assert.notEqual(second.publicKey, ed.publicKey);
-  assert.equal(calls(name), 3);
+  assert.equal(calls(name), 4);
 });
 
 test('zero Ed25519 seeds are valid; malformed and mismatched helper responses fail closed', macOnly, async () => {
@@ -179,7 +188,7 @@ test('zero Ed25519 seeds are valid; malformed and mismatched helper responses fa
   for (const name of ['short-ed', 'wrong-ed', 'mismatch-ed', 'cross-curve-ed']) {
     await assert.rejects(getKeyPair(edOptions(name)), { message: 'INVALID_HELPER_RESPONSE' });
     await assert.rejects(getKeyPair(edOptions(name)), { message: 'INVALID_HELPER_RESPONSE' });
-    assert.equal(calls(name), 1);
+    assert.equal(calls(name), 2);
   }
 });
 
@@ -188,6 +197,27 @@ test('Rust authentication waits leave Node timers and filesystem workers respons
   const first = await Promise.race([pending.then(() => 'keys'), stat(helper).then(() => 'filesystem')]);
   assert.equal(first, 'filesystem');
   const keys = await pending;
-  assert.equal(calls('slow-concurrent'), 1);
+  assert.equal(calls('slow-concurrent'), 4);
   for (const key of keys) assert.deepEqual(key, keys[0]);
+});
+
+
+test('authenticationTtl reuses only authentication, expires, and supports zero', macOnly, async () => {
+  const auths = (name: string) => readFileSync(helper + '.auth', 'utf8').split('\n').filter(v => v === name).length;
+  const selection = { ...options('ttl-session'), authenticationTtl: 1 };
+  const one = await getKeyPair(selection);
+  const two = await getKeyPair(selection);
+  assert.deepEqual(one, two);
+  assert.equal(calls('ttl-session'), 2);
+  assert.equal(auths('ttl-session'), 1);
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  await getKeyPair(selection);
+  assert.equal(auths('ttl-session'), 2);
+  await getKeyPair({ ...selection, authenticationTtl: 0 });
+  await getKeyPair({ ...selection, authenticationTtl: 0 });
+  assert.equal(auths('ttl-session'), 4);
+  for (const authenticationTtl of [5400, 86400, Number.MAX_SAFE_INTEGER]) {
+    const result = await getKeyPair({ ...selection, authenticationTtl });
+    assert.deepEqual(result, one);
+  }
 });

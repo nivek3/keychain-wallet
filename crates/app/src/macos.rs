@@ -20,10 +20,6 @@ use security_framework_sys::{
 };
 use std::{
     ptr::{self, NonNull},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
@@ -132,6 +128,48 @@ impl Drop for AuthContext {
     fn drop(&mut self) {
         unsafe {
             self.0.invalidate();
+        }
+    }
+}
+
+// Only the pipe-based Node helper retains this context; UI operations use fresh contexts.
+#[derive(Default)]
+pub struct AuthenticationSession {
+    context: Option<AuthContext>,
+    authenticated_at: Option<Instant>,
+    authenticated_wall: Option<std::time::SystemTime>,
+    ttl: Duration,
+}
+impl AuthenticationSession {
+    pub fn clear(&mut self) {
+        self.context = None;
+        self.authenticated_at = None;
+        self.authenticated_wall = None;
+    }
+    pub fn expire(&mut self, now: Instant) {
+        if self.authenticated_at.is_some_and(|start| now.duration_since(start) >= self.ttl)
+            || self.authenticated_wall.is_some_and(|start| start.elapsed().map_or(true, |age| age >= self.ttl))
+        {
+            self.clear();
+        }
+    }
+    pub fn remaining(&self, now: Instant) -> Option<Duration> {
+        self.authenticated_at.map(|start| self.ttl.saturating_sub(now.duration_since(start)))
+    }
+    pub fn context(&mut self, reason: &str, ttl: Duration, now: Instant) -> &AuthContext {
+        self.expire(now);
+        if self.ttl != ttl {
+            self.clear();
+            self.ttl = ttl;
+        }
+        self.context.get_or_insert_with(|| AuthContext::new(reason, false))
+    }
+    pub fn complete(&mut self, success: bool, now: Instant) {
+        if success && !self.ttl.is_zero() {
+            self.authenticated_at.get_or_insert(now);
+            self.authenticated_wall.get_or_insert_with(std::time::SystemTime::now);
+        } else {
+            self.clear();
         }
     }
 }
@@ -421,7 +459,8 @@ impl Clipboard {
         ));
         Ok(())
     }
-    pub fn paste_confirmation(&self) -> Result<Zeroizing<String>> {
+    #[cfg(test)]
+    fn paste_confirmation(&self) -> Result<Zeroizing<String>> {
         let value = self
             .board
             .stringForType(&NSString::from_str("public.utf8-plain-text"))
@@ -458,14 +497,9 @@ impl Clipboard {
 // Intercept before winit can read the system clipboard; egui's input hook is too late.
 pub struct ClipboardGate {
     monitor: Retained<AnyObject>,
-    pub allow_paste: Arc<AtomicBool>,
-    pub paste_requested: Arc<AtomicBool>,
 }
 impl ClipboardGate {
     pub fn new() -> Result<Self> {
-        let allow_paste = Arc::new(AtomicBool::new(false));
-        let paste_requested = Arc::new(AtomicBool::new(false));
-        let (allow, requested) = (allow_paste.clone(), paste_requested.clone());
         let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
             let e = unsafe { event.as_ref() };
             if e.modifierFlags().contains(NSEventModifierFlags::Command) {
@@ -474,9 +508,6 @@ impl ClipboardGate {
                     .map(|s| s.to_string().to_ascii_lowercase())
                     .unwrap_or_default();
                 if matches!(key.as_str(), "c" | "x" | "v") {
-                    if key == "v" && allow.load(Ordering::SeqCst) {
-                        requested.store(true, Ordering::SeqCst);
-                    }
                     return ptr::null_mut();
                 }
             }
@@ -486,11 +517,7 @@ impl ClipboardGate {
             NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block)
         }
         .ok_or(Failure::Configuration)?;
-        Ok(Self {
-            monitor,
-            allow_paste,
-            paste_requested,
-        })
+        Ok(Self { monitor })
     }
 }
 impl Drop for ClipboardGate {
@@ -504,6 +531,39 @@ impl Drop for ClipboardGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn node_authentication_window_is_fixed_and_zero_never_retains_a_context() {
+        let now = Instant::now();
+        let mut session = AuthenticationSession::default();
+        session.context("Public fixture", Duration::from_secs(300), now);
+        assert!(session.authenticated_at.is_none());
+        session.complete(true, now);
+        session.context("Public fixture", Duration::from_secs(300), now + Duration::from_secs(299));
+        session.complete(true, now + Duration::from_secs(299));
+        assert_eq!(session.remaining(now + Duration::from_secs(299)), Some(Duration::from_secs(1)));
+        session.expire(now + Duration::from_secs(300));
+        assert!(session.context.is_none());
+        session.context("Public fixture", Duration::ZERO, now);
+        session.complete(true, now);
+        assert!(session.context.is_none());
+        session.context("Public fixture", Duration::from_secs(300), now);
+        session.complete(false, now);
+        assert!(session.context.is_none());
+        session.context("Public fixture", Duration::from_secs(300), now);
+        session.complete(true, now);
+        session.context("Public fixture", Duration::ZERO, now);
+        assert!(session.authenticated_at.is_none());
+        session.context("Public fixture", Duration::from_secs(300), now);
+        session.complete(true, now);
+        session.authenticated_wall = Some(std::time::SystemTime::now() - Duration::from_secs(301));
+        session.expire(now);
+        assert!(session.context.is_none());
+        session.context("Public fixture", Duration::from_secs(300), now);
+        session.complete(true, now);
+        session.authenticated_wall = Some(std::time::SystemTime::now() + Duration::from_secs(10));
+        session.expire(now);
+        assert!(session.context.is_none());
+    }
     #[test]
     fn system_entropy_generates_a_valid_twelve_word_wallet_without_persistence() {
         let phrase = generate_mnemonic().unwrap();
@@ -527,6 +587,12 @@ mod tests {
             board: board.clone(),
             expiry: None,
         };
+        assert!(!clipboard.has_copy());
+        board.setString_forType(
+            &NSString::from_str("unrelated initial content"),
+            &NSString::from_str("public.utf8-plain-text"),
+        );
+        assert!(!clipboard.has_copy());
         clipboard.copy("public clipboard test sentinel").unwrap();
         assert!(clipboard.has_copy());
         assert_eq!(

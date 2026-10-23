@@ -9,9 +9,10 @@ pub const BORDER: Color32 = Color32::from_rgb(225, 225, 229);
 pub const ACCENT: Color32 = Color32::from_rgb(0, 122, 255);
 pub const SOFT: Color32 = Color32::from_rgb(235, 244, 255);
 pub const SEARCH: Color32 = Color32::from_rgb(234, 234, 237);
+pub const SELECTED: Color32 = Color32::from_rgb(226, 228, 233);
 pub const DANGER: Color32 = Color32::from_rgb(190, 44, 40);
 pub const DANGER_SOFT: Color32 = Color32::from_rgb(255, 245, 245);
-pub const DANGER_BORDER: Color32 = Color32::from_rgb(235, 202, 202);
+pub const CONTROL: Color32 = Color32::from_rgb(238, 238, 241);
 pub const WARNING_SOFT: Color32 = Color32::from_rgb(255, 247, 225);
 pub const WARNING_INK: Color32 = Color32::from_rgb(120, 80, 0);
 
@@ -38,18 +39,18 @@ pub fn configure(ctx: &egui::Context) {
     style.visuals.selection.bg_fill = SOFT;
     style.visuals.selection.stroke = Stroke::new(1.0_f32, ACCENT);
     style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    style.visuals.widgets.inactive.weak_bg_fill = Color32::WHITE;
-    style.visuals.widgets.hovered.weak_bg_fill = SOFT;
-    style.visuals.widgets.active.weak_bg_fill = SOFT;
+    style.visuals.widgets.inactive.weak_bg_fill = CONTROL;
+    style.visuals.widgets.hovered.weak_bg_fill = SEARCH;
+    style.visuals.widgets.active.weak_bg_fill = SELECTED;
     style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, ACCENT);
+    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, BORDER);
+    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, BORDER);
     style.visuals.widgets.inactive.corner_radius = 6.into();
     style.visuals.widgets.hovered.corner_radius = 6.into();
     style.visuals.widgets.active.corner_radius = 6.into();
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(14.0, 7.0);
-    style.spacing.interact_size.y = 30.0;
+    style.spacing.button_padding = egui::vec2(12.0, 5.0);
+    style.spacing.interact_size.y = 26.0;
     style.spacing.icon_width = 16.0;
     style
         .text_styles
@@ -68,50 +69,36 @@ pub fn configure(ctx: &egui::Context) {
         .insert(TextStyle::Monospace, FontId::monospace(12.0));
     ctx.set_style(style);
 }
-fn button(label: &str, width: f32, primary: bool) -> egui::Button<'_> {
-    egui::Button::new((
-        egui::Atom::grow(),
-        RichText::new(label).color(if primary { Color32::WHITE } else { INK }),
-        egui::Atom::grow(),
-    ))
-    .min_size(egui::vec2(width, 32.0))
-    .fill(if primary { ACCENT } else { Color32::WHITE })
-    .stroke(Stroke::new(1.0_f32, if primary { ACCENT } else { BORDER }))
-    .corner_radius(6)
-}
-pub fn primary(ui: &mut Ui, label: &str) -> egui::Response {
-    ui.add(button(label, 136.0, true))
-}
-pub fn secondary(ui: &mut Ui, label: &str) -> egui::Response {
-    ui.add(button(label, 76.0, false))
-}
-pub fn danger(ui: &mut Ui, label: &str) -> egui::Response {
-    let red = DANGER;
-    ui.add(
-        button(label, 100.0, true)
-            .fill(red)
-            .stroke(Stroke::new(1.0_f32, red)),
-    )
-}
-pub fn delete_button(ui: &mut Ui, label: &str) -> egui::Response {
-    let red = DANGER;
+fn button(ui: &mut Ui, label: &str, size: egui::Vec2, accent: Option<Color32>) -> egui::Response {
     ui.scope(|ui| {
+        let fill = accent.unwrap_or(CONTROL);
         let widgets = &mut ui.visuals_mut().widgets;
-        widgets.inactive.weak_bg_fill = DANGER_SOFT;
-        widgets.inactive.bg_stroke = Stroke::new(1.0_f32, DANGER_BORDER);
-        widgets.hovered.weak_bg_fill = DANGER_SOFT;
-        widgets.hovered.bg_stroke = Stroke::new(1.0_f32, red);
-        widgets.active.weak_bg_fill = DANGER_SOFT;
-        widgets.active.bg_stroke = Stroke::new(1.0_f32, red);
-        ui.add(
-            egui::Button::new(RichText::new(label).color(red))
-                .min_size(egui::vec2(132.0, 32.0))
-                .corner_radius(7),
-        )
+        for (visual, shade) in [(&mut widgets.inactive, 0), (&mut widgets.hovered, 7), (&mut widgets.active, 14)] {
+            visual.weak_bg_fill = Color32::from_rgb(
+                fill.r().saturating_sub(shade), fill.g().saturating_sub(shade), fill.b().saturating_sub(shade),
+            );
+            visual.bg_stroke = Stroke::new(1.0_f32, if accent.is_some() { visual.weak_bg_fill } else { BORDER });
+            visual.corner_radius = 6.into();
+            visual.expansion = 0.0;
+        }
+        ui.add(egui::Button::new((
+            egui::Atom::grow(),
+            RichText::new(label).color(if accent.is_some() { Color32::WHITE } else { INK }),
+            egui::Atom::grow(),
+        )).min_size(size))
     }).inner
 }
+pub fn primary(ui: &mut Ui, label: &str) -> egui::Response {
+    button(ui, label, egui::vec2(80.0, 28.0), Some(ACCENT))
+}
+pub fn secondary(ui: &mut Ui, label: &str) -> egui::Response {
+    button(ui, label, egui::vec2(68.0, 28.0), None)
+}
+pub fn danger(ui: &mut Ui, label: &str) -> egui::Response {
+    button(ui, label, egui::vec2(100.0, 28.0), Some(DANGER))
+}
 pub fn actions(ui: &mut Ui, back: &str, next: &str) -> (bool, bool) {
-    ui.add_space(18.0);
+    ui.add_space(16.0);
     ui.separator();
     ui.add_space(6.0);
     let mut previous = false;
@@ -123,6 +110,17 @@ pub fn actions(ui: &mut Ui, back: &str, next: &str) -> (bool, bool) {
         });
     });
     (proceed, previous)
+}
+pub fn backup_actions(ui: &mut Ui) -> (bool, bool, bool) {
+    let (mut save, mut skip, mut cancel) = (false, false, false);
+    ui.horizontal(|ui| {
+        cancel = secondary(ui, "Cancel").clicked();
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            save = primary(ui, "Save").clicked();
+            skip = secondary(ui, "Skip").clicked();
+        });
+    });
+    (save, skip, cancel)
 }
 pub fn recovery_actions(ui: &mut Ui, shown: bool, copied: bool) -> (bool, bool, bool) {
     let (mut back, mut copy, mut hide) = (false, false, false);
@@ -159,7 +157,7 @@ pub fn input_frame() -> Frame {
         .fill(Color32::WHITE)
         .stroke(Stroke::new(1.0_f32, BORDER))
         .corner_radius(6)
-        .inner_margin(Margin::symmetric(10, 8))
+        .inner_margin(Margin::symmetric(9, 6))
 }
 pub fn public_field(ui: &mut Ui, title: &str, text: &mut String, limit: usize) {
     label(ui, title);
@@ -210,19 +208,13 @@ pub fn app_icon(ui: &mut Ui) {
     );
 }
 pub fn launch(ui: &mut Ui, label: &str, primary: bool) -> egui::Response {
-    ui.add_sized(egui::vec2(264.0, 36.0), button(label, 264.0, primary))
+    button(ui, label, egui::vec2(264.0, 32.0), primary.then_some(ACCENT))
 }
 pub fn toolbar_button(ui: &mut Ui, label: &str) -> egui::Response {
     ui.scope(|ui| {
         ui.spacing_mut().button_padding = egui::vec2(3.0, 3.0);
         ui.spacing_mut().interact_size = egui::vec2(24.0, 24.0);
-        ui.add_sized(
-            egui::vec2(24.0, 24.0),
-            egui::Button::new(RichText::new(label).size(16.0))
-                .fill(Color32::WHITE)
-                .stroke(Stroke::new(1.0_f32, BORDER))
-                .corner_radius(7),
-        )
+        button(ui, label, egui::vec2(24.0, 24.0), None)
     }).inner
 }
 pub fn search_icon(ui: &mut Ui) {
@@ -238,9 +230,27 @@ pub fn search_icon(ui: &mut Ui) {
         stroke,
     );
 }
+pub fn navigation_button(ui: &mut Ui, label: &str, sidebar: bool) -> egui::Response {
+    let response = button(ui, "", egui::vec2(28.0, 26.0), None);
+    let rect = egui::Rect::from_center_size(response.rect.center(), egui::vec2(15.0, 13.0));
+    let stroke = Stroke::new(1.3_f32, if ui.is_enabled() { INK } else { MUTED });
+    let painter = ui.painter();
+    if sidebar {
+        painter.rect_stroke(rect, 2, stroke, egui::StrokeKind::Inside);
+        let x = rect.left() + 5.0;
+        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], stroke);
+    } else {
+        let left = egui::pos2(rect.left() + 1.0, rect.center().y);
+        painter.line_segment([left, egui::pos2(rect.right(), rect.center().y)], stroke);
+        painter.line_segment([left, left + egui::vec2(6.0, -6.0)], stroke);
+        painter.line_segment([left, left + egui::vec2(6.0, 6.0)], stroke);
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    response.on_hover_text(label)
+}
 pub fn account_row(ui: &mut Ui, title: &str, address: Option<&str>) {
     Frame::new()
-        .inner_margin(Margin::symmetric(0, 12))
+        .inner_margin(Margin::symmetric(0, 8))
         .show(ui, |ui| {
             ui.with_layout(Layout::top_down(Align::Min), |ui| {
                 ui.label(RichText::new(title).size(12.0).color(MUTED));
@@ -257,29 +267,21 @@ pub fn recovery_mask(ui: &mut Ui, height: f32) -> egui::Response {
     );
     let painter = ui.painter();
     let highlighted = response.hovered() || response.has_focus();
-    let content_top = rect.center().y - 62.0;
-    painter.rect_filled(rect, 10, if highlighted { SOFT } else { SEARCH });
+    let content_top = rect.center().y - 48.0;
+    painter.rect_filled(rect, 10, if highlighted { SOFT } else { Color32::WHITE });
     painter.rect_stroke(rect, 10, Stroke::new(1.0_f32, if highlighted { ACCENT } else { BORDER }), egui::StrokeKind::Inside);
-    // The mask is decorative; no secret is loaded or rendered underneath it.
-    for offset in [24.0, 48.0, 72.0] {
-        let band = egui::Rect::from_center_size(
-            egui::pos2(rect.center().x, content_top + offset),
-            egui::vec2((rect.width() - 64.0).max(0.0), 12.0),
-        );
-        painter.rect_filled(band.expand(4.0), 10, Color32::from_black_alpha(2));
-        painter.rect_filled(band, 8, Color32::from_black_alpha(3));
-    }
-    let eye = egui::pos2(rect.center().x, content_top + 28.0);
+    // No secret is loaded or rendered underneath the mask.
+    let eye = egui::pos2(rect.center().x, content_top + 16.0);
     let stroke = Stroke::new(1.6_f32, MUTED);
     painter.add(egui::Shape::ellipse_stroke(eye, egui::vec2(10.0, 6.0), stroke));
     painter.circle_stroke(eye, 3.0, stroke);
     painter.line_segment([eye + egui::vec2(-9.0, -9.0), eye + egui::vec2(9.0, 9.0)], stroke);
-    painter.text(egui::pos2(rect.center().x, content_top + 62.0), egui::Align2::CENTER_CENTER,
-        "Show recovery phrase", FontId::proportional(15.0), INK);
-    painter.text(egui::pos2(rect.center().x, content_top + 96.0), egui::Align2::CENTER_CENTER,
-        "Make sure no one is watching your screen.", FontId::proportional(11.0), MUTED);
+    painter.text(egui::pos2(rect.center().x, content_top + 52.0), egui::Align2::CENTER_CENTER,
+        "Show", FontId::proportional(14.0), INK);
+    painter.text(egui::pos2(rect.center().x, content_top + 76.0), egui::Align2::CENTER_CENTER,
+        "Keep your screen private.", FontId::proportional(11.0), MUTED);
     response.widget_info(|| egui::WidgetInfo::labeled(
-        egui::WidgetType::Button, ui.is_enabled(), "Show recovery phrase",
+        egui::WidgetType::Button, ui.is_enabled(), "Show seed phrase",
     ));
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -287,7 +289,7 @@ pub fn recovery_mask(ui: &mut Ui, height: f32) -> egui::Response {
 pub fn avatar(ui: &mut Ui, name: &str, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, (size * 0.22) as u8, ACCENT);
+        .rect_filled(rect, (size * 0.22) as u8, Color32::from_rgb(130, 136, 148));
     let letter = name
         .chars()
         .next()
@@ -302,24 +304,39 @@ pub fn avatar(ui: &mut Ui, name: &str, size: f32) {
         Color32::WHITE,
     );
 }
+pub fn wallet_heading(ui: &mut Ui, name: &str) -> egui::Response {
+    ui.horizontal(|ui| {
+        avatar(ui, name, 36.0);
+        ui.add_space(4.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 36.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.add(egui::Label::new(RichText::new(name).size(18.0).strong()).wrap());
+            },
+        );
+    })
+    .response
+}
+
 pub fn wallet_row(ui: &mut Ui, name: &str, subtitle: &str, selected: bool) -> egui::Response {
     let width = ui.available_width();
     let row = Frame::new()
         .fill(if selected {
-            SOFT
+            SELECTED
         } else {
             Color32::TRANSPARENT
         })
         .corner_radius(8)
-        .inner_margin(Margin::symmetric(10, 8))
+        .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.set_width((width - 20.0).max(80.0));
+            ui.set_width((width - 16.0).max(80.0));
             ui.horizontal(|ui| {
-                ui.set_height(38.0);
-                avatar(ui, name, 32.0);
+                ui.set_height(32.0);
+                avatar(ui, name, 28.0);
                 ui.add_space(4.0);
                 ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), 38.0),
+                    egui::vec2(ui.available_width(), 32.0),
                     Layout::top_down(Align::Min),
                     |ui| {
                         ui.add(
@@ -353,6 +370,30 @@ pub fn focus_ring(ui: &Ui, rect: egui::Rect, focused: bool) {
 mod tests {
     use super::*;
     #[test]
+    fn wallet_heading_wraps_long_names_without_overflow() {
+        for width in [280.0, 452.0] {
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            let _ = ctx.run(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO, egui::vec2(width + 32.0, 400.0),
+                )),
+                ..Default::default()
+            }, |ctx| {
+                egui::CentralPanel::default().frame(Frame::new().inner_margin(16))
+                    .show(ctx, |ui| {
+                        let bounds = ui.max_rect();
+                        for name in ["demo", "long-wallet-name-with-no-spaces-".repeat(4).as_str(), "我的钱包"] {
+                            let heading = wallet_heading(ui, name);
+                            assert!(bounds.contains_rect(heading.rect));
+                            assert!(heading.rect.height() >= 36.0);
+                        }
+                    });
+            });
+        }
+    }
+
+    #[test]
     fn recovery_mask_fits_the_detail_panel() {
         for width in [280.0, 404.0] {
             let ctx = egui::Context::default();
@@ -376,7 +417,7 @@ mod tests {
 
     #[test]
     fn account_rows_wrap_public_addresses_within_the_panel() {
-        for width in [224.0, 364.0, 520.0] {
+        for width in [224.0, 348.0, 364.0, 520.0] {
             let ctx = egui::Context::default();
             configure(&ctx);
             let raw = egui::RawInput {
@@ -398,6 +439,9 @@ mod tests {
                         ] {
                             let row = ui.scope(|ui| account_row(ui, "Ethereum", address));
                             assert!(bounds.contains_rect(row.response.rect));
+                            if width >= 348.0 {
+                                assert!(row.response.rect.height() <= 55.0);
+                            }
                         }
                     });
             });
@@ -405,7 +449,7 @@ mod tests {
     }
     #[test]
     fn wallet_rows_fit_sidebar_and_narrow_window() {
-        for width in [236.0, 364.0] {
+        for width in [164.0, 192.0, 236.0, 364.0] {
             let ctx = egui::Context::default();
             configure(&ctx);
             let raw = egui::RawInput {
@@ -424,7 +468,7 @@ mod tests {
                             wallet_row(ui, &"long-wallet-".repeat(5), "0x123456…abcdef", true);
                         assert!(bounds.contains_rect(row.rect));
                         assert!(row.rect.width() <= width + 1.0);
-                        assert!(row.rect.height() >= 54.0);
+                        assert!(row.rect.height() >= 44.0);
                     });
             });
         }

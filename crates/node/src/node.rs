@@ -14,13 +14,14 @@ pub struct JsKeyPair {
 pub async fn get_key_pair(input: Value, root: String, home: String) -> Result<JsKeyPair> {
     // Authentication must not occupy Node's shared libuv worker pool.
     let output = tokio::task::spawn_blocking(move || {
-        let (name, curve, path, helper) = validate(&input)?;
+        let (name, curve, path, helper, authentication_ttl) = validate(&input)?;
         let helper = find_helper(helper, Some(home.into()), Path::new(&root))?;
         unlock(Selection {
             helper,
             name,
             curve,
             path,
+            authentication_ttl,
         })
     })
     .await

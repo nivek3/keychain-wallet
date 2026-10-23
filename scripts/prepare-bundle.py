@@ -3,6 +3,7 @@ import datetime
 import pathlib
 import plistlib
 import re
+import shutil
 import sys
 
 profile_path, bundle_id, app_path, version = sys.argv[1:]
@@ -38,6 +39,7 @@ info = {
     "CFBundleName": "keychain-wallet",
     "CFBundleDisplayName": "keychain-wallet",
     "CFBundleExecutable": "keychain-wallet",
+    "CFBundleIconFile": "AppIcon.icns",
     "CFBundlePackageType": "APPL",
     "CFBundleVersion": version,
     "CFBundleShortVersionString": version,
@@ -50,6 +52,10 @@ signed_entitlements = {
     "com.apple.developer.team-identifier": teams[0],
     "keychain-access-groups": [app_id],
 }
+resources = app / "Contents/Resources"
+resources.mkdir(parents=True, exist_ok=True)
+shutil.copyfile(pathlib.Path(__file__).resolve().parents[1] / "assets/AppIcon.icns",
+                resources / "AppIcon.icns")
 for path, value in [(app / "Contents/Info.plist", info),
                     (app.parent / "entitlements.plist", signed_entitlements)]:
     with path.open("wb") as destination:
